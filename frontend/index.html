@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PALETTE</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<!-- ── First-run setup overlay ──────────────────────────────────────────────── -->
+<div id="setup-overlay" class="hidden" style="position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:100">
+  <div class="overlay-box">
+    <h1>PALETTE</h1>
+    <p class="subtitle">Visual Inspiration Palette — reference library for diffusion workflows</p>
+    <div class="form-group">
+      <label>Library Folder Path</label>
+      <input type="text" id="setup-path" placeholder="C:\Users\you\reference-library">
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px">One library holds everything. Palettes are named collections within it — an item can belong to several.</p>
+    <button class="btn btn-primary" onclick="setupLibrary()">Open / Create Library</button>
+  </div>
+</div>
+
+<!-- ── Main app ──────────────────────────────────────────────────────────────── -->
+<div id="app" class="hidden">
+
+  <nav id="sidebar">
+    <div class="sidebar-header">
+      <div class="app-title">PALETTE</div>
+      <div class="proj-label" id="sidebar-lib-path">—</div>
+    </div>
+    <ul class="sidebar-nav">
+      <li data-page="library">🎨 Library</li>
+      <li data-page="import">⬇ Import</li>
+      <li data-page="clip">✂ Clip</li>
+      <li data-page="export">📤 Export</li>
+    </ul>
+    <div class="sidebar-footer">ref → diffusion</div>
+  </nav>
+
+  <main id="content">
+
+    <!-- ── Library page ───────────────────────────────────────────────────── -->
+    <div id="page-library" class="page">
+      <div class="review-layout" style="height:100%">
+
+        <div class="review-grid-area">
+          <div class="review-toolbar">
+            <button class="filter-btn active-all" data-typefilter="" onclick="Library.setTypeFilter('')">All</button>
+            <button class="filter-btn" data-typefilter="image" onclick="Library.setTypeFilter('image')">Images</button>
+            <button class="filter-btn" data-typefilter="video" onclick="Library.setTypeFilter('video')">Videos</button>
+            <select id="tag-filter-select" style="width:150px;padding:4px 8px;font-size:12px"
+              onchange="Library.setTagFilter(this.value)"></select>
+            <span class="review-stats" id="library-stats"></span>
+          </div>
+
+          <div class="review-toolbar" style="border-top:none">
+            <span style="font-size:12px;color:var(--muted)">Palettes:</span>
+            <span id="palette-filter-list" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+          </div>
+
+          <div class="batch-bar hidden" id="lib-batch-bar">
+            <span class="sel-count" id="lib-sel-count">0 selected</span>
+            <input type="text" id="lib-batch-tag-input" placeholder="tag…" style="width:130px">
+            <button class="btn btn-primary btn-sm" onclick="Library.applyBatchTag('add')">+ Tag</button>
+            <button class="btn btn-ghost btn-sm" onclick="Library.applyBatchTag('remove')">− Tag</button>
+            <select id="batch-palette-select" style="width:130px;padding:4px 8px;font-size:12px"></select>
+            <button class="btn btn-primary btn-sm" onclick="Library.applyBatchPalette('add')">+ Palette</button>
+            <button class="btn btn-ghost btn-sm" onclick="Library.applyBatchPalette('remove')">− Palette</button>
+            <button class="btn btn-ghost btn-sm" onclick="Library.clearSelection()">✕ Clear</button>
+            <button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="Library.batchDelete()">Delete</button>
+          </div>
+
+          <div class="thumb-grid" id="lib-grid"></div>
+        </div>
+
+        <!-- Detail panel -->
+        <div class="review-detail">
+          <div class="detail-empty" id="lib-detail-empty">
+            Click an item to view it<br>
+            <span style="font-size:11px;margin-top:6px;display:block">Ctrl+click or Shift+click to multi-select for batch tagging</span>
+          </div>
+
+          <div class="detail-content hidden" id="lib-detail-content">
+            <div class="detail-video">
+              <video id="lib-detail-video" controls class="hidden" style="max-height:240px"></video>
+              <img id="lib-detail-image" class="hidden" style="width:100%;max-height:240px;object-fit:contain;display:block">
+            </div>
+
+            <div>
+              <div style="display:flex;gap:6px">
+                <input type="text" id="lib-detail-title" placeholder="Title…" style="flex:1">
+                <button class="btn btn-ghost btn-sm" onclick="Library.saveTitle()">Save</button>
+              </div>
+              <div class="detail-meta" id="lib-detail-meta" style="margin-top:6px"></div>
+            </div>
+
+            <div>
+              <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Tags</div>
+              <div class="tag-list" id="lib-detail-tags"></div>
+              <div class="add-tag-row" style="margin-top:8px">
+                <input type="text" id="lib-detail-tag-input" placeholder="Add tag…">
+                <button class="btn btn-ghost btn-sm" onclick="Library.addDetailTag()">Add</button>
+              </div>
+            </div>
+
+            <div>
+              <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Palettes</div>
+              <div class="tag-list" id="lib-detail-palettes"></div>
+              <div class="add-tag-row" style="margin-top:8px">
+                <select id="lib-detail-palette-select" style="flex:1"></select>
+                <button class="btn btn-ghost btn-sm" onclick="Library.addDetailPalette()">Add</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-actions">
+            <button class="btn btn-primary btn-sm" onclick="Library.sendToExport()">📤 Export…</button>
+            <button class="btn btn-danger btn-sm" style="margin-left:auto" onclick="Library.deleteDetailItem()">Delete</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Import page ────────────────────────────────────────────────────── -->
+    <div id="page-import" class="page">
+      <div class="page-header"><h2>Import</h2></div>
+      <div class="page-body">
+
+        <div class="section-card">
+          <h3>Download from URL</h3>
+          <div class="form-group">
+            <label>URL (YouTube, Vimeo, etc.)</label>
+            <input type="text" id="dl-url" placeholder="https://www.youtube.com/watch?v=...">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div class="form-group" style="margin:0">
+              <label>Start Time (optional)</label>
+              <input type="text" id="dl-start" placeholder="0:00 or 1:23:45">
+            </div>
+            <div class="form-group" style="margin:0">
+              <label>End Time (optional)</label>
+              <input type="text" id="dl-end" placeholder="0:30 or 1:25:00">
+            </div>
+          </div>
+          <button class="btn btn-primary" id="dl-btn" onclick="Import.downloadUrl()">Download</button>
+        </div>
+
+        <div class="section-card">
+          <h3>Import from Hard Drive</h3>
+          <div id="drop-zone" class="drop-zone">
+            <div style="font-size:24px;margin-bottom:8px">🖼</div>
+            <div>Click to browse or drag images / video files here</div>
+            <div style="font-size:12px;margin-top:4px">JPG, PNG, WEBP, GIF · MP4, MOV, MKV, WEBM…</div>
+            <input type="file" id="file-input" multiple accept="video/*,image/*">
+          </div>
+        </div>
+
+        <p style="font-size:12px;color:var(--muted)">Imported items land in the Library untagged. Tag and assign them to palettes from there.</p>
+      </div>
+    </div>
+
+    <!-- ── Clip page ──────────────────────────────────────────────────────── -->
+    <div id="page-clip" class="page">
+      <div class="page-header"><h2>Clip</h2></div>
+      <div class="page-body" style="padding:0;overflow:hidden;height:100%">
+        <div class="split-layout" style="padding:16px;height:100%">
+
+          <div class="split-sidebar">
+            <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:10px">Library Videos</h3>
+            <div id="clip-source-list"></div>
+          </div>
+
+          <div class="split-main">
+            <div class="split-compare">
+              <div class="split-compare-panel">
+                <div class="panel-label">Start frame</div>
+                <div class="kf-still-area">
+                  <img id="clip-kf-img" alt="keyframe">
+                  <div id="clip-kf-empty" class="kf-still-empty">Mark first keyframe</div>
+                </div>
+                <div id="clip-kf-info" class="still-info"></div>
+              </div>
+              <div class="split-compare-panel">
+                <div class="panel-label">Current position</div>
+                <video id="clip-video" controls></video>
+              </div>
+            </div>
+
+            <div class="frame-nav">
+              <button class="btn-frame" onclick="Clip.stepFrames(-10)" title="Back 10 frames (Shift+←)">⏮ 10</button>
+              <button class="btn-frame" onclick="Clip.stepFrames(-1)" title="Back 1 frame (←)">◀ 1</button>
+              <span class="time-display" id="clip-frame-display">f 0</span>
+              <button class="btn-frame" onclick="Clip.stepFrames(1)" title="Forward 1 frame (→)">1 ▶</button>
+              <button class="btn-frame" onclick="Clip.stepFrames(10)" title="Forward 10 frames (Shift+→)">10 ⏭</button>
+              <button class="btn-frame mark" onclick="Clip.markKeyframe()" title="Mark keyframe (M)">Mark [M]</button>
+              <span class="fps-label" id="clip-fps-display">— fps</span>
+            </div>
+
+            <div id="clip-keyframe-list"></div>
+
+            <div class="btn-row" style="margin-top:12px">
+              <button class="btn btn-success" id="clip-extract-btn" onclick="Clip.extractAll()">Extract Clips</button>
+              <button class="btn btn-ghost btn-sm" onclick="Clip.clearKeyframes()">Clear All</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Export page ────────────────────────────────────────────────────── -->
+    <div id="page-export" class="page">
+      <div class="page-header"><h2>Export</h2></div>
+      <div class="page-body" style="padding:0;overflow:hidden;height:100%">
+        <div class="split-layout" style="padding:16px;height:100%">
+
+          <div class="split-sidebar">
+            <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:10px">Library Videos</h3>
+            <div id="export-source-list"></div>
+          </div>
+
+          <div class="split-main">
+
+            <div class="tab-bar">
+              <button class="tab-btn active" data-mode="sheet" onclick="ExportPage.setMode('sheet')">Contact Sheet</button>
+              <button class="tab-btn" data-mode="video" onclick="ExportPage.setMode('video')">Video</button>
+            </div>
+
+            <!-- Contact sheet controls -->
+            <div id="sheet-controls">
+              <div class="section-card">
+                <h3>Sampling &amp; Layout</h3>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px">
+                  <div class="form-group" style="margin:0">
+                    <label>Every Nth frame</label>
+                    <input type="number" id="sheet-every-n" value="30" min="1">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Columns</label>
+                    <input type="number" id="sheet-cols" value="4" min="1">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Tile width (px)</label>
+                    <input type="number" id="sheet-tile-width" value="320" min="64">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Padding (px)</label>
+                    <input type="number" id="sheet-padding" value="8" min="0">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Reading order</label>
+                    <select id="sheet-order">
+                      <option value="rows">Rows (L→R, T→B)</option>
+                      <option value="cols">Columns (T→B, L→R)</option>
+                    </select>
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Max sheet width (px, optional)</label>
+                    <input type="number" id="sheet-max-width" placeholder="e.g. 2048">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Start (sec, optional)</label>
+                    <input type="number" id="sheet-start" step="0.1" placeholder="0">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>End (sec, optional)</label>
+                    <input type="number" id="sheet-end" step="0.1" placeholder="">
+                  </div>
+                </div>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:12px">
+                  <input type="checkbox" id="sheet-labels" style="accent-color:var(--accent)">
+                  Burn frame-number labels into tiles
+                </label>
+                <div style="display:flex;align-items:center;gap:14px">
+                  <button class="btn btn-success" id="sheet-export-btn" onclick="ExportPage.runSheetExport()">Render Contact Sheet</button>
+                  <span style="font-size:12px;color:var(--muted)" id="sheet-estimate"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Video export controls -->
+            <div id="video-controls" class="hidden">
+              <div class="section-card">
+                <h3>Video Export</h3>
+                <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:12px">
+                  <div class="form-group" style="margin:0">
+                    <label>Start (sec, optional)</label>
+                    <input type="number" id="vexp-start" step="0.1" placeholder="0">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>End (sec, optional)</label>
+                    <input type="number" id="vexp-end" step="0.1" placeholder="">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Scale to width (px, optional)</label>
+                    <input type="number" id="vexp-width" placeholder="e.g. 768">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>FPS override (optional)</label>
+                    <input type="number" id="vexp-fps" step="0.01" placeholder="e.g. 16">
+                  </div>
+                </div>
+                <button class="btn btn-success" id="video-export-btn" onclick="ExportPage.runVideoExport()">Export Video</button>
+              </div>
+            </div>
+
+            <div id="export-result"></div>
+
+            <div class="export-history">
+              <h3>Export History</h3>
+              <div id="export-history-list"></div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<div id="toast-container"></div>
+
+<script src="/static/js/app.js"></script>
+<script src="/static/js/import.js"></script>
+<script src="/static/js/clip.js"></script>
+<script src="/static/js/library.js"></script>
+<script src="/static/js/export.js"></script>
+</body>
+</html>
