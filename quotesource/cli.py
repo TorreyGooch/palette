@@ -102,6 +102,48 @@ def cmd_episodes(args):
     _out(list_episodes(args.source_id), args.pretty)
 
 
+def cmd_index(args):
+    from .indexer import build_index
+
+    _out(build_index(rebuild=args.rebuild, quiet=args.quiet), args.pretty)
+
+
+def cmd_grep(args):
+    from .search import grep
+
+    hits = grep(args.terms, source=args.source, person=args.person,
+                after=args.after, before=args.before, limit=args.limit)
+    if args.pretty:
+        for h in hits:
+            print(f"[{h['score']:6.2f}] {h['episode_id']} {h['start']:8.1f}s  {h['episode_title'][:50]}")
+            print(f"         {h['text'][:160]}")
+            print(f"         {h['url_ts']}")
+    else:
+        _out(hits, False)
+
+
+def cmd_context(args):
+    from .search import context
+
+    if args.timestamp is None and not args.range:
+        _fail("context requires a timestamp or --range START END", 2)
+    range_ = tuple(args.range) if args.range else None
+    data = context(args.episode_id, timestamp=args.timestamp,
+                   range_=range_, window=args.window)
+    if args.pretty:
+        print(f"{data['episode_title']}  [{data['window'][0]:.1f} – {data['window'][1]:.1f}s]")
+        for s in data["segments"]:
+            print(f"  {s['start']:8.1f}  {s['text']}")
+    else:
+        _out(data, False)
+
+
+def cmd_episode_info(args):
+    from .search import episode_info
+
+    _out(episode_info(args.episode_id), args.pretty)
+
+
 def cmd_status(args):
     from .status import corpus_status
 
@@ -158,6 +200,36 @@ def main(argv=None):
 
     p = sub.add_parser("status", help="corpus-wide progress and disk usage", parents=[shared])
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("index", help="build/refresh the search index (incremental)", parents=[shared])
+    p.add_argument("--rebuild", action="store_true", help="drop and rebuild from scratch")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_index)
+
+    filt = argparse.ArgumentParser(add_help=False)
+    filt.add_argument("--source", help="filter by source id")
+    filt.add_argument("--person", help="match source people lists and episode title/description")
+    filt.add_argument("--after", help="upload date >= (YYYY-MM-DD)")
+    filt.add_argument("--before", help="upload date <= (YYYY-MM-DD)")
+    filt.add_argument("--limit", type=int, default=20)
+
+    p = sub.add_parser("grep", help="full-text keyword search over transcript chunks",
+                       parents=[shared, filt])
+    p.add_argument("terms", help='FTS5 query: words, "quoted phrases", OR, NOT, prefix*')
+    p.set_defaults(func=cmd_grep)
+
+    p = sub.add_parser("context", help="read raw transcript around a point or range",
+                       parents=[shared])
+    p.add_argument("episode_id")
+    p.add_argument("timestamp", nargs="?", type=float, default=None)
+    p.add_argument("--range", nargs=2, type=float, metavar=("START", "END"))
+    p.add_argument("--window", type=float, default=30.0, help="seconds around timestamp (default 30)")
+    p.set_defaults(func=cmd_context)
+
+    p = sub.add_parser("episode-info", help="full metadata plus transcript stats",
+                       parents=[shared])
+    p.add_argument("episode_id")
+    p.set_defaults(func=cmd_episode_info)
 
     args = parser.parse_args(argv)
 

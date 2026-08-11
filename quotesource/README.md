@@ -23,3 +23,19 @@ the `QUOTESOURCE_DATA` env var or a `quotesource_data` key in `config.json`.
 Statuses: `captions` (YouTube captions normalized) · `needs_transcription`
 (RSS or captionless — Phase 2 whisper queue) · `captions_pending` (transient
 fetch failure, retried on next ingest).
+
+## Search (Phase 3)
+
+```bash
+qs index                          # incremental; re-run after any ingest
+qs grep '"clean your room"'       # FTS5: phrases, OR, NOT, prefix*
+qs grep 'lobster hierarchy' --person "Jordan Peterson" --after 2017-01-01
+qs context <episode-id> 1999 --window 15    # read transcript around a point
+qs context <episode-id> --range 1980 2020
+qs episode-info <episode-id>
+qs status --pretty                # corpus + index freshness
+```
+
+Hits are JSON: `{episode_id, source_id, start, end, text, score,
+episode_title, upload_date, url, url_ts}`. Semantic `qs search` lands with
+the embedding layer (Phase 3b).
