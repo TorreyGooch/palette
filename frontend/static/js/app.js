@@ -36,6 +36,7 @@ const App = {
       clip: () => Clip.load(),
       library: () => Library.load(),
       export: () => ExportPage.load(),
+      quotes: () => Quotes.load(),
     };
     handlers[page]?.();
   },

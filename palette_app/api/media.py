@@ -69,6 +69,17 @@ def image_thumbnail(image_path: Path, thumb_path: Path) -> bool:
         return False
 
 
+async def audio_thumbnail(audio_path: Path, thumb_path: Path) -> bool:
+    """Waveform image for audio items."""
+    code, _, _ = await _run([
+        "ffmpeg", "-y", "-i", str(audio_path),
+        "-filter_complex",
+        "showwavespic=s=320x180:colors=4a9eff,drawbox=x=0:y=89:w=iw:h=1:color=4a9eff",
+        "-frames:v", "1", str(thumb_path),
+    ])
+    return code == 0 and thumb_path.exists()
+
+
 async def extract_clip(source: Path, dest: Path, start: float, end: float) -> bool:
     # Fast seek + re-encode for frame-accurate cuts (same approach as vidset).
     duration = round(end - start, 6)

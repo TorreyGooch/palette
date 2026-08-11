@@ -171,6 +171,15 @@ def cmd_episode_info(args):
     _out(episode_info(args.episode_id), args.pretty)
 
 
+def cmd_pull(args):
+    from .pull import pull
+
+    item = pull(args.episode_id, args.range[0], args.range[1],
+                mode=args.mode, palette_name=args.palette,
+                person=args.person, pad=args.pad)
+    _out(item, args.pretty)
+
+
 def cmd_status(args):
     from .status import corpus_status
 
@@ -276,6 +285,16 @@ def main(argv=None):
                        parents=[shared])
     p.add_argument("episode_id")
     p.set_defaults(func=cmd_episode_info)
+
+    p = sub.add_parser("pull", help="fetch a verified range and stage it on a palette",
+                       parents=[shared])
+    p.add_argument("episode_id")
+    p.add_argument("--range", nargs=2, type=float, required=True, metavar=("START", "END"))
+    p.add_argument("--mode", choices=["audio", "av"], default="av")
+    p.add_argument("--palette", help="palette name (created if missing)")
+    p.add_argument("--person", help="speaker for attribution + tag")
+    p.add_argument("--pad", type=float, default=0.0, help="extra seconds each side after snapping")
+    p.set_defaults(func=cmd_pull)
 
     args = parser.parse_args(argv)
 

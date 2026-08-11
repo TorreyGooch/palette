@@ -114,7 +114,9 @@ const Library = {
       const focused = this.focusedId === item.id;
       const badge = item.type === 'video'
         ? `<span class="badge badge-approved">▶ ${fmtDuration(item.duration)}</span>`
-        : `<span class="badge badge-unreviewed">img</span>`;
+        : item.type === 'audio'
+          ? `<span class="badge badge-flagged">♪ ${fmtDuration(item.duration)}</span>`
+          : `<span class="badge badge-unreviewed">img</span>`;
       return `
         <div class="thumb-card ${sel ? 'selected' : ''} ${focused ? 'focused' : ''}"
              onclick="Library.handleClick(event, '${esc(item.id)}', ${idx})">
@@ -215,17 +217,25 @@ const Library = {
 
     const vid = document.getElementById('lib-detail-video');
     const img = document.getElementById('lib-detail-image');
+    const aud = document.getElementById('lib-detail-audio');
+    vid.classList.add('hidden');
+    img.classList.add('hidden');
+    aud.classList.add('hidden');
+    vid.pause?.();
+    aud.pause?.();
+    const src = `/api/media/${encodeURIComponent(item.filename)}`;
     if (item.type === 'video') {
-      img.classList.add('hidden');
       vid.classList.remove('hidden');
-      vid.src = `/api/media/${encodeURIComponent(item.filename)}`;
+      vid.src = src;
       vid.loop = true;
       vid.load();
+    } else if (item.type === 'audio') {
+      aud.classList.remove('hidden');
+      aud.src = src;
+      aud.load();
     } else {
-      vid.pause?.();
-      vid.classList.add('hidden');
       img.classList.remove('hidden');
-      img.src = `/api/media/${encodeURIComponent(item.filename)}`;
+      img.src = src;
     }
 
     document.getElementById('lib-detail-title').value = item.title;

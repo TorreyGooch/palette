@@ -8,6 +8,7 @@ SUBFOLDERS = ["media", "thumbnails", "exports"]
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
+AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".opus", ".ogg", ".wav", ".flac"}
 
 
 def create_library(root: Path) -> dict:
@@ -43,7 +44,37 @@ def media_type(filename: str) -> str:
         return "image"
     if ext in VIDEO_EXTS:
         return "video"
+    if ext in AUDIO_EXTS:
+        return "audio"
     return "other"
+
+
+async def register_media_file(root: Path, filename: str, title: str,
+                              url: Optional[str] = None) -> dict:
+    """Probe, thumbnail, and add a media file (already in root/media) to the
+    library. Shared by the web app and the quotesource CLI."""
+    from .api.media import probe, video_thumbnail, image_thumbnail, audio_thumbnail
+
+    path = root / "media" / filename
+    duration = fps = None
+    mtype = media_type(filename)
+    if mtype in ("video", "audio"):
+        info = await probe(path)
+        duration, fps = info["duration"], info["fps"]
+    item = new_item(filename, title, url, duration, fps)
+
+    thumb = root / "thumbnails" / f"{item['id']}.jpg"
+    if item["type"] == "video":
+        await video_thumbnail(path, thumb, (duration or 1) / 2)
+    elif item["type"] == "image":
+        image_thumbnail(path, thumb)
+    elif item["type"] == "audio":
+        await audio_thumbnail(path, thumb)
+
+    lib = load_library(root)
+    lib["items"].append(item)
+    save_library(root, lib)
+    return item
 
 
 def new_item(filename: str, title: str, url: Optional[str] = None,

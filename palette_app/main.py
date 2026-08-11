@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import get_library_path, set_library_path
 from .library import (
     create_library, load_library, save_library, is_library,
-    new_item, new_palette, media_type,
+    new_item, new_palette, media_type, register_media_file,
 )
 from .api.download import download_url
 from .api.media import (
@@ -45,24 +45,7 @@ def _find(items: list, id_val: str) -> Optional[dict]:
 
 
 async def _register_file(root: Path, filename: str, title: str, url: Optional[str] = None) -> dict:
-    """Probe (if video), thumbnail, and add a media file to the library."""
-    path = root / "media" / filename
-    duration = fps = None
-    if media_type(filename) == "video":
-        info = await probe(path)
-        duration, fps = info["duration"], info["fps"]
-    item = new_item(filename, title, url, duration, fps)
-
-    thumb = root / "thumbnails" / f"{item['id']}.jpg"
-    if item["type"] == "video":
-        await video_thumbnail(path, thumb, (duration or 1) / 2)
-    elif item["type"] == "image":
-        image_thumbnail(path, thumb)
-
-    lib = load_library(root)
-    lib["items"].append(item)
-    save_library(root, lib)
-    return item
+    return await register_media_file(root, filename, title, url)
 
 
 # ── Library setup ─────────────────────────────────────────────────────────────
@@ -393,6 +376,75 @@ async def export_video_ep(body: dict = Body(...)):
     if not result.get("ok"):
         raise HTTPException(500, f"Video export failed: {result.get('error', 'unknown')}")
     return {**result, "filename": out_name}
+
+
+# ── Quotesource bridge ────────────────────────────────────────────────────────
+# Sync endpoints on purpose: FastAPI runs them in a threadpool, and the
+# quotesource library is synchronous (sqlite + subprocess via asyncio.run).
+
+@app.get("/api/qs/status")
+def qs_status():
+    from quotesource.status import corpus_status
+
+    try:
+        return corpus_status()
+    except Exception as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/qs/search")
+def qs_search(q: str, mode: str = "semantic", source: Optional[str] = None,
+              person: Optional[str] = None, after: Optional[str] = None,
+              before: Optional[str] = None, limit: int = 20):
+    try:
+        if mode == "grep":
+            from quotesource.search import grep
+
+            return {"mode": "grep", "hits": grep(
+                q, source=source, person=person, after=after,
+                before=before, limit=limit)}
+        from quotesource.embedder import embed_stats, semantic_search
+
+        stats = embed_stats()
+        if stats["embedded"] == 0:
+            raise HTTPException(409, "no embeddings yet — run: qs embed")
+        return {"mode": "semantic", "coverage": stats["coverage"],
+                "hits": semantic_search(q, source=source, person=person,
+                                        after=after, before=before, limit=limit)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/qs/context")
+def qs_context(episode_id: str, start: float, end: float, window: float = 20.0):
+    from quotesource.search import context
+
+    try:
+        return context(episode_id, range_=(start - window, end + window))
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/qs/pull")
+def qs_pull(body: dict = Body(...)):
+    from quotesource.pull import pull
+
+    try:
+        item = pull(
+            body["episode_id"],
+            float(body["start"]), float(body["end"]),
+            mode=body.get("mode", "av"),
+            palette_name=body.get("palette") or None,
+            person=body.get("person") or None,
+            pad=float(body.get("pad") or 0),
+        )
+        return item
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @app.get("/api/exports")
