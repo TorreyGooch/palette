@@ -259,7 +259,10 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False) -
             result["episodes"].append(entry["episode_id"])
         except Exception as e:
             result["failed"] += 1
-            _log(quiet, f"{entry['episode_id']}  FAILED: {e}")
+            result.setdefault("failures", []).append(
+                {"episode_id": entry["episode_id"], "error": str(e)})
+            # failures always print, even with --quiet
+            print(f"  {entry['episode_id']}  FAILED: {e}", flush=True)
         processed += 1
         if stype != "rss":
             time.sleep(SLEEP_BETWEEN_EPISODES)
