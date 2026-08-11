@@ -102,6 +102,29 @@ def cmd_episodes(args):
     _out(list_episodes(args.source_id), args.pretty)
 
 
+def cmd_status(args):
+    from .status import corpus_status
+
+    data = corpus_status()
+    if not args.pretty:
+        _out(data, False)
+        return
+    print(f"data root: {data['data_root']}")
+    print(f"disk: {data['disk']['total_mb']} MB")
+    print()
+    hdr = f"{'source':<22}{'episodes':>9}{'captions':>9}{'whisper':>9}{'needs_tx':>9}{'pending':>9}"
+    print(hdr)
+    print("-" * len(hdr))
+    for s in data["sources"]:
+        tag = "" if s["registered"] else "  (unregistered)"
+        print(f"{s['source']:<22}{s['episodes']:>9}{s['captions']:>9}{s['whisper']:>9}"
+              f"{s['needs_transcription']:>9}{s['captions_pending']:>9}{tag}")
+    t = data["totals"]
+    print("-" * len(hdr))
+    print(f"{'TOTAL':<22}{t['episodes']:>9}{t['captions']:>9}{t['whisper']:>9}"
+          f"{t['needs_transcription']:>9}{t['captions_pending']:>9}")
+
+
 def main(argv=None):
     shared = argparse.ArgumentParser(add_help=False)
     shared.add_argument("--pretty", action="store_true", help="human output instead of JSON")
@@ -132,6 +155,9 @@ def main(argv=None):
     p = sub.add_parser("episodes", help="list episodes for a source with transcript status", parents=[shared])
     p.add_argument("source_id")
     p.set_defaults(func=cmd_episodes)
+
+    p = sub.add_parser("status", help="corpus-wide progress and disk usage", parents=[shared])
+    p.set_defaults(func=cmd_status)
 
     args = parser.parse_args(argv)
 
