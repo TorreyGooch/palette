@@ -108,16 +108,43 @@ def cmd_index(args):
     _out(build_index(rebuild=args.rebuild, quiet=args.quiet), args.pretty)
 
 
+def cmd_embed(args):
+    from .embedder import embed_pending
+
+    _out(embed_pending(batch_size=args.batch_size, limit=args.limit,
+                       reset=args.reset, quiet=args.quiet), args.pretty)
+
+
+def cmd_search(args):
+    from .embedder import embed_stats, semantic_search
+
+    stats = embed_stats()
+    if stats["embedded"] == 0:
+        _fail("no embeddings yet — run: qs embed")
+    hits = semantic_search(args.query, source=args.source, person=args.person,
+                           after=args.after, before=args.before, limit=args.limit)
+    if args.pretty:
+        if stats["coverage"] < 1.0:
+            print(f"(note: {stats['coverage']:.0%} of chunks embedded)")
+        _print_hits(hits)
+    else:
+        _out({"coverage": stats["coverage"], "hits": hits}, False)
+
+
+def _print_hits(hits):
+    for h in hits:
+        print(f"[{h['score']:6.2f}] {h['episode_id']} {h['start']:8.1f}s  {(h['episode_title'] or '')[:50]}")
+        print(f"         {h['text'][:160]}")
+        print(f"         {h['url_ts']}")
+
+
 def cmd_grep(args):
     from .search import grep
 
     hits = grep(args.terms, source=args.source, person=args.person,
                 after=args.after, before=args.before, limit=args.limit)
     if args.pretty:
-        for h in hits:
-            print(f"[{h['score']:6.2f}] {h['episode_id']} {h['start']:8.1f}s  {h['episode_title'][:50]}")
-            print(f"         {h['text'][:160]}")
-            print(f"         {h['url_ts']}")
+        _print_hits(hits)
     else:
         _out(hits, False)
 
@@ -153,6 +180,12 @@ def cmd_status(args):
         return
     print(f"data root: {data['data_root']}")
     print(f"disk: {data['disk']['total_mb']} MB")
+    idx = data.get("index") or {}
+    if idx.get("exists"):
+        print(f"index: {idx['episodes']} episodes, {idx['chunks']} chunks, {idx['db_mb']} MB")
+    emb = data.get("embeddings")
+    if emb and emb.get("embedded"):
+        print(f"embeddings: {emb['embedded']}/{emb['chunks']} ({emb['coverage']:.0%}) [{emb['model']}]")
     print()
     hdr = f"{'source':<22}{'episodes':>9}{'captions':>9}{'whisper':>9}{'needs_tx':>9}{'pending':>9}"
     print(hdr)
@@ -217,6 +250,19 @@ def main(argv=None):
                        parents=[shared, filt])
     p.add_argument("terms", help='FTS5 query: words, "quoted phrases", OR, NOT, prefix*')
     p.set_defaults(func=cmd_grep)
+
+    p = sub.add_parser("search", help="semantic search over transcript chunks",
+                       parents=[shared, filt])
+    p.add_argument("query")
+    p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("embed", help="embed index chunks (resumable batch job)",
+                       parents=[shared])
+    p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--reset", action="store_true", help="drop all vectors and re-embed")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_embed)
 
     p = sub.add_parser("context", help="read raw transcript around a point or range",
                        parents=[shared])

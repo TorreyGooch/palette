@@ -56,10 +56,19 @@ def corpus_status() -> dict:
                 "captions_pending": 0, "unknown": 0,
             })
 
+    from .indexer import index_stats
+    try:
+        from .embedder import embed_stats
+        embed = embed_stats()
+    except Exception:
+        embed = None
+
     return {
         "data_root": str(root),
         "sources": sources,
         "totals": totals,
+        "index": index_stats(),
+        "embeddings": embed,
         "disk": {
             "episodes_mb": round(_dir_size(root / "episodes") / 1048576, 1),
             "total_mb": round(_dir_size(root) / 1048576, 1),

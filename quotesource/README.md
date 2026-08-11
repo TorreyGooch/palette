@@ -37,5 +37,17 @@ qs status --pretty                # corpus + index freshness
 ```
 
 Hits are JSON: `{episode_id, source_id, start, end, text, score,
-episode_title, upload_date, url, url_ts}`. Semantic `qs search` lands with
-the embedding layer (Phase 3b).
+episode_title, upload_date, url, url_ts}`.
+
+## Semantic search (Phase 3b)
+
+```bash
+qs embed                # one-time batch (resumable; ~25 chunks/s on CPU)
+qs search "the brain isn't doing backpropagation" --person Hinton
+```
+
+`qs search` matches meaning, `qs grep` matches words; use both and
+triangulate with `qs context`. Embeddings: BAAI/bge-small-en-v1.5 via
+fastembed (local ONNX, no torch), vectors in SQLite, exact cosine search.
+Override the model with `QS_EMBED_MODEL` (then `qs embed --reset`).
+Search JSON includes `coverage` so partial embedding states are visible.
