@@ -187,14 +187,16 @@ def snap_to_speech(rms, frame_s: float, region_start: float,
     def t(i):
         return i * frame_s
 
-    # ── onset: start of the run covering region_start, else the next run
+    # ── onset: start of the run covering region_start, else the next run.
+    # Searching out to `extend` matters: a requested start sitting in a long
+    # pause would otherwise keep all that dead air.
     onset, head_clean = region_start, False
     for a, b in runs:
         if t(a) <= region_start + search and t(b) > region_start:
             onset, head_clean = t(a), True
             break
         if t(a) > region_start:
-            if t(a) - region_start <= search:
+            if t(a) - region_start <= extend:
                 onset, head_clean = t(a), True
             break
 
@@ -214,9 +216,21 @@ def snap_to_speech(rms, frame_s: float, region_start: float,
 
     if offset <= onset:
         return {"onset": region_start, "offset": region_end,
-                "head_clean": False, "tail_clean": False}
+                "head_clean": False, "tail_clean": False,
+                "prev_end": None, "next_start": None}
+
+    # Neighbouring speech, so the caller can cap its padding: the pause we
+    # landed in may be shorter than the pad, and padding into the next
+    # utterance is what "clean pause, 0 ms trailing silence" looks like.
+    prev_end = next((t(b) for a, b in runs if t(b) <= onset + 1e-6), None)
+    for a, b in runs:
+        if t(b) <= onset + 1e-6:
+            prev_end = t(b)
+    next_start = next((t(a) for a, b in runs if t(a) >= offset - 1e-6), None)
+
     return {"onset": onset, "offset": offset,
-            "head_clean": head_clean, "tail_clean": tail_clean}
+            "head_clean": head_clean, "tail_clean": tail_clean,
+            "prev_end": prev_end, "next_start": next_start}
 
 
 def edge_report(rms, frame_s: float, cut_start: float, cut_end: float) -> dict:
@@ -324,8 +338,14 @@ def cut_quote(episode_id: str, start: float, end: float,
         snap = snap_to_speech(rms, frame_s, w_start, w_end)
         onset, offset = snap["onset"], snap["offset"]
 
+        # Pad, but never past the neighbouring speech: the pause we landed
+        # in can be shorter than the pad.
         cut_start = max(0.0, onset - HEAD_PAD_MS / 1000.0)
+        if snap.get("prev_end") is not None:
+            cut_start = max(cut_start, snap["prev_end"] + 0.005)
         cut_end = min(win_dur, offset + TAIL_PAD_MS / 1000.0)
+        if snap.get("next_start") is not None:
+            cut_end = min(cut_end, snap["next_start"] - 0.005)
         report = edge_report(rms, frame_s, cut_start, cut_end)
         report["head_clean"] = snap["head_clean"]
         report["tail_clean"] = snap["tail_clean"]
