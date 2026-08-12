@@ -32,15 +32,62 @@ Budget: transcripts+metadata ~2.5 GB per 1,000 YouTube episodes; whisper
 audio ~25 MB/hour of content (≈15 GB for 600 hours); pull cache capped by
 `QS_PULL_CACHE_GB` (default 6).
 
-## 3. Serve the UI over the LAN
+## 3. Serve the UI over the tailnet
 
-```bash
-PALETTE_HOST=0.0.0.0 python run.py          # Windows: set PALETTE_HOST=0.0.0.0
+`launch-tailnet.bat` (or `PALETTE_HOST=tailscale`) binds **only** this
+machine's Tailscale address, so the app is reachable from your other
+tailnet devices and from nothing else:
+
+```
+launch-tailnet.bat
 ```
 
-Open `http://<server-ip>:7861` from your desktop. Allow the port through
-the server firewall. This is a trusting, unauthenticated app — keep it on
-your LAN, never port-forward it to the internet.
+Windows PowerShell has no inline env-var prefix, so the bash form
+`PALETTE_HOST=tailscale python run.py` is a syntax error there. Use:
+
+```powershell
+$env:PALETTE_HOST="tailscale"; python run.py
+```
+
+cmd.exe: `set PALETTE_HOST=tailscale && python run.py`. On Linux/macOS the
+bash form works as written.
+
+`tailscale` resolves via `tailscale ip -4`, falling back to scanning
+interfaces for the 100.64.0.0/10 range Tailscale allocates from. You can
+also pass a literal address (`PALETTE_HOST=100.99.248.49`) or a hostname.
+
+Then browse to `http://<that-100.x-address>:7861`, or use the MagicDNS
+name: `http://<machine-name>:7861`.
+
+### Firewall
+
+Windows Firewall blocks the inbound connection by default. The first run
+usually raises an "allow this app" prompt — accepting it is enough. If you
+get no prompt, add a rule from an **Administrator** terminal, scoped to the
+tailnet range so it stays closed to every other network:
+
+```powershell
+netsh advfirewall firewall add rule name="PALETTE tailnet" dir=in action=allow protocol=TCP localport=7861 remoteip=100.64.0.0/10
+```
+
+To allow just one peer instead of the whole tailnet, use that machine's
+address: `remoteip=100.102.79.115`.
+
+### Which IP goes where
+
+`PALETTE_HOST` is the address the app **listens on**, so it must belong to
+the machine *running* palette — never the machine you browse from. The
+client's address never appears in `PALETTE_HOST`; it only shows up if you
+scope a firewall rule to it. `PALETTE_HOST=tailscale` sidesteps the whole
+question by resolving to whichever machine it runs on.
+
+### Why not 0.0.0.0
+
+`PALETTE_HOST=0.0.0.0` also works, but it binds *every* interface — the
+tailnet, your home LAN, and whatever public wi-fi you connect to later.
+This app has **no authentication**: anyone who can reach the port has full
+control of the library, including delete. Prefer the Tailscale binding, and
+never expose it with `tailscale funnel` or a port-forward.
 
 ## 4. Fill the queue
 
