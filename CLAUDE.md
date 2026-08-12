@@ -27,7 +27,8 @@ Two things live in this repo:
 | `qs search "<query>"` | semantic search (meaning, not words) |
 | `qs context <ep> <ts> [--window s]` / `--range a b` | raw transcript around a point — verify quotes here |
 | `qs episode-info <ep>` | full metadata + transcript stats |
-| `qs pull <ep> --range a b --mode audio\|av [--palette P] [--person X] [--pad s]` | fetch + stage onto a palette |
+| `qs transcribe <ep>` / `--batch [--source id] [--limit N]` | whisper backfill; resumable, disk-floor guarded |
+| `qs pull <ep> --range a b --mode audio\|av [--rough] [--palette P] [--person X] [--pad s]` | fetch + stage onto a palette |
 
 Shared filters on grep/search: `--source <id>`, `--person <name>` (matches
 source `people` lists and episode title/description), `--after/--before
@@ -61,8 +62,15 @@ before quoting anywhere.
 - Ranges you pass to `pull` are snapped *outward* to sentence boundaries
   (capped ~12 s each way) and the staged item's `attribution.range` /
   `attribution.quote_text` record what was actually cut. Don't pre-pad.
-- `pull` hits the network (yt-dlp section download) and takes ~1–5 min for
-  av mode; audio is faster. It never retains the full video.
+- `--rough` (fast, default in the UI) stream-copies: no re-encode, original
+  quality, but the file starts at the preceding keyframe — up to ~20 s
+  before the quote. `attribution.quote_offset` says where the quote begins
+  inside the file; use it when trimming. Omit `--rough` for an exact cut
+  that starts on the quote (slower, re-encoded).
+- First `pull` from an episode downloads its full media (~1–3 min, capped
+  at 720p) into an LRU cache; later pulls from the same episode take
+  seconds. Once `qs transcribe` has run, audio pulls read the corpus audio
+  store and need no network at all.
 - Staged items land in `library.json` with `attribution` (person, show,
   episode, date, timestamped URL, quote text, transcript provenance), tags
   `quotesource` + person, type `audio` or `video`.
