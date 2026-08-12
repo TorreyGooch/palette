@@ -49,69 +49,134 @@ def snap_range(segments: list[dict], start: float, end: float) -> dict:
 
 ROUGH_PAD_S = 10.0
 
+# Cap video resolution for pulls: full-file download must stay reasonable.
+# Override with QS_PULL_MAX_HEIGHT.
+def _max_height() -> int:
+    import os
+
+    return int(os.environ.get("QS_PULL_MAX_HEIGHT", "720"))
+
+
+def _cache_dir() -> Path:
+    from .paths import ensure_root
+
+    d = ensure_root() / "cache"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def _cache_gb() -> float:
+    import os
+
+    return float(os.environ.get("QS_PULL_CACHE_GB", "6"))
+
+
+def _evict_cache():
+    """Drop least-recently-used cached full files beyond the size cap."""
+    files = sorted(_cache_dir().glob("*"), key=lambda p: p.stat().st_atime)
+    total = sum(f.stat().st_size for f in files)
+    cap = _cache_gb() * 1024 ** 3
+    for f in files:
+        if total <= cap:
+            break
+        total -= f.stat().st_size
+        f.unlink(missing_ok=True)
+
+
+async def _get_full_media(episode_id: str, url: str, mode: str,
+                          ep_dir: Path) -> Path | None:
+    """Return a local full copy of the episode's media for cutting.
+
+    Priority for flow: 1) the corpus audio store (audio mode — free after
+    Phase 2 transcription has run), 2) the pull cache (instant repeat pulls
+    from the same episode), 3) download full stream into the cache.
+
+    Full-file download is deliberate: yt-dlp section downloads go through
+    ffmpeg's HTTP client, which YouTube throttles to a stall (measured 27+
+    min for a 30s section). Video is capped at QS_PULL_MAX_HEIGHT (720).
+    """
+    import yt_dlp
+
+    # The cache is keyed by episode: an empty key would make every episode
+    # share one entry and serve the wrong footage under the right attribution.
+    if not episode_id:
+        raise ValueError("episode_id is required for media fetch/caching")
+
+    if mode == "audio" and ep_dir is not None:
+        corpus_audio = ep_dir / "audio.m4a"
+        if corpus_audio.exists():
+            return corpus_audio
+
+    ext = "mp4" if mode == "av" else "m4a"
+    cached = _cache_dir() / f"{episode_id}.{ext}"
+    if cached.exists():
+        cached.touch()  # bump LRU
+        return cached
+
+    if mode == "av":
+        h = _max_height()
+        fmt = (f"bestvideo[height<=?{h}][ext=mp4]+bestaudio[ext=m4a]"
+               f"/best[height<=?{h}][ext=mp4]/best")
+    else:
+        fmt = "bestaudio[ext=m4a]/bestaudio/best"
+    opts = {
+        "quiet": True, "no_warnings": True, "noprogress": True,
+        "format": fmt,
+        "outtmpl": str(_cache_dir() / f"{episode_id}.%(ext)s"),
+    }
+    if mode == "av":
+        opts["merge_output_format"] = "mp4"
+
+    loop = asyncio.get_event_loop()
+
+    def _dl():
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+
+    await loop.run_in_executor(None, _dl)
+    if not cached.exists():
+        cand = [p for p in _cache_dir().glob(f"{episode_id}.*")
+                if p.suffix in (".mp4", ".m4a", ".webm", ".mkv")]
+        if not cand:
+            return None
+        cached = cand[0]
+    _evict_cache()
+    return cached
+
 
 async def _fetch_youtube_section(url: str, start: float, end: float,
                                  mode: str, dest: Path,
-                                 rough: bool = False) -> bool:
-    """Download a padded section; exact mode re-encodes to the precise range,
-    rough mode keeps the keyframe-aligned section as-is (fast, original
-    quality, quote sits a few seconds inside)."""
-    import shutil as _shutil
-
-    import yt_dlp
-
+                                 rough: bool = False,
+                                 episode_id: str = "",
+                                 ep_dir: Path | None = None) -> bool:
     from palette_app.api.media import extract_clip, _run
 
     pad = ROUGH_PAD_S if rough else FETCH_PAD_S
-    sec_start = max(0.0, start - pad)
-    sec_end = end + pad
+    s = max(0.0, start - pad) if rough else start
+    e = end + pad if rough else end
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp) / ("section.mp4" if mode == "av" else "section.m4a")
-        if mode == "av":
-            fmt = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-        else:
-            fmt = "bestaudio[ext=m4a]/bestaudio/best"
-        opts = {
-            "quiet": True, "no_warnings": True, "noprogress": True,
-            "format": fmt,
-            "outtmpl": str(tmp_path),
-            "download_ranges": yt_dlp.utils.download_range_func(
-                None, [[sec_start, sec_end]]),
-            # exact mode: force keyframes so the section starts precisely at
-            # sec_start and our offset math holds. rough mode: skip the
-            # re-encode entirely and accept keyframe-aligned boundaries.
-            "force_keyframes_at_cuts": not rough,
-        }
-        if mode == "av":
-            opts["merge_output_format"] = "mp4"
+    src = await _get_full_media(episode_id, url, mode, ep_dir)
+    if not src:
+        return False
 
-        loop = asyncio.get_event_loop()
-
-        def _dl():
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([url])
-
-        await loop.run_in_executor(None, _dl)
-        if not tmp_path.exists():
-            cand = list(Path(tmp).glob("section*"))
-            if not cand:
-                return False
-            tmp_path = cand[0]
-
+    if mode == "av":
         if rough:
-            _shutil.move(str(tmp_path), str(dest))
-            return dest.exists()
+            # stream copy: starts at the keyframe at/before s — no re-encode
+            code, _, _ = await _run([
+                "ffmpeg", "-y", "-ss", str(s), "-i", str(src),
+                "-t", str(e - s), "-c", "copy",
+                "-avoid_negative_ts", "make_zero", str(dest),
+            ])
+            return code == 0 and dest.exists()
+        return await extract_clip(src, dest, s, e)
 
-        offset = start - sec_start
-        dur = end - start
-        if mode == "av":
-            return await extract_clip(tmp_path, dest, offset, offset + dur)
-        code, _, _ = await _run([
-            "ffmpeg", "-y", "-ss", str(offset), "-i", str(tmp_path),
-            "-t", str(dur), "-c:a", "aac", "-b:a", "128k", "-vn", str(dest),
-        ])
-        return code == 0 and dest.exists()
+    codec = ["-c", "copy"] if rough and src.suffix == ".m4a" \
+        else ["-c:a", "aac", "-b:a", "128k"]
+    code, _, _ = await _run([
+        "ffmpeg", "-y", "-ss", str(s), "-i", str(src),
+        "-t", str(e - s), *codec, "-vn", str(dest),
+    ])
+    return code == 0 and dest.exists()
 
 
 async def _fetch_rss_audio(audio_url: str, start: float, end: float,
@@ -165,15 +230,32 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
     kind = "rough (stream copy)" if rough else "exact (re-encoded)"
     _progress(f"downloading {mode} section, {kind} ({e - s:.0f}s span)")
     if meta.get("source_id") and url.startswith("http") and "youtube" in url:
-        ok = asyncio.run(_fetch_youtube_section(url, s, e, mode, dest, rough))
+        ok = asyncio.run(_fetch_youtube_section(
+            url, s, e, mode, dest, rough, episode_id, ep_dir))
     elif mode == "audio" and meta.get("audio_url"):
         ok = asyncio.run(_fetch_rss_audio(meta["audio_url"], s, e, dest))
     elif meta.get("audio_url"):
         raise ValueError("av mode is not available for RSS episodes (audio only)")
     else:
-        ok = asyncio.run(_fetch_youtube_section(url, s, e, mode, dest, rough))
+        ok = asyncio.run(_fetch_youtube_section(
+            url, s, e, mode, dest, rough, episode_id, ep_dir))
     if not ok:
         raise RuntimeError("segment fetch/cut failed")
+
+    # Rough cuts start at the keyframe at/before s, so the file can begin well
+    # before the quote. Record where the quote actually sits inside the file so
+    # downstream trimming doesn't have to hunt for it.
+    file_start, quote_offset, file_duration = s, 0.0, e - s
+    try:
+        from palette_app.api.media import probe as _probe
+
+        info = asyncio.run(_probe(dest))
+        if info.get("duration"):
+            file_duration = round(info["duration"], 3)
+            file_start = round(e - file_duration, 3)
+            quote_offset = round(max(0.0, s - file_start), 3)
+    except Exception:
+        pass
 
     _progress("registering in library")
     quote_short = snapped["quote_text"][:70].rstrip()
@@ -193,6 +275,10 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
         "source_url_ts": _ts_url(url, s),
         "range": [round(s, 3), round(e, 3)],
         "precision": "rough" if rough else "exact",
+        # where the quote lives inside the staged file
+        "file_start": file_start,
+        "file_duration": file_duration,
+        "quote_offset": quote_offset,
         "quote_text": snapped["quote_text"],
         "transcript_provenance": transcript.get("transcript_source"),
     }

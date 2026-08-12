@@ -49,7 +49,13 @@ def _ensure_embed_schema(con: sqlite3.Connection):
 def _get_model():
     from fastembed import TextEmbedding
 
-    return TextEmbedding(model_name())
+    # GPU path: pip install fastembed-gpu (onnxruntime-gpu). Auto-detected;
+    # falls back to CPU silently if CUDA providers aren't available.
+    try:
+        return TextEmbedding(model_name(), providers=[
+            "CUDAExecutionProvider", "CPUExecutionProvider"])
+    except Exception:
+        return TextEmbedding(model_name())
 
 
 def embed_stats() -> dict:

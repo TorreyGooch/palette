@@ -1,3 +1,4 @@
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -473,6 +474,45 @@ def qs_pull_status(job_id: str):
     if not job:
         raise HTTPException(404, "unknown job")
     return job
+
+
+_warming: set = set()
+
+
+@app.post("/api/qs/warm")
+def qs_warm(body: dict = Body(...)):
+    """Start caching an episode's media in the background so a subsequent
+    pull is near-instant. Fire-and-forget; safe to call repeatedly."""
+    import asyncio as _asyncio
+    import threading
+
+    from quotesource.pull import _get_full_media
+    from quotesource.search import _find_episode_dir
+
+    episode_id = body.get("episode_id")
+    mode = body.get("mode", "av")
+    if not episode_id:
+        raise HTTPException(400, "episode_id required")
+    key = f"{episode_id}:{mode}"
+    if key in _warming:
+        return {"status": "already_warming"}
+
+    ep_dir = _find_episode_dir(episode_id)
+    if not ep_dir:
+        raise HTTPException(404, "episode not found")
+    meta = json.loads((ep_dir / "metadata.json").read_text(encoding="utf-8"))
+
+    def _run():
+        try:
+            _asyncio.run(_get_full_media(episode_id, meta.get("url", ""), mode, ep_dir))
+        except Exception:
+            pass
+        finally:
+            _warming.discard(key)
+
+    _warming.add(key)
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "warming"}
 
 
 @app.get("/api/exports")

@@ -171,6 +171,22 @@ def cmd_episode_info(args):
     _out(episode_info(args.episode_id), args.pretty)
 
 
+def cmd_transcribe(args):
+    from .transcribe import transcribe_batch, transcribe_episode
+    from .search import _find_episode_dir
+
+    if args.batch:
+        _out(transcribe_batch(source=args.source, limit=args.limit,
+                              quiet=args.quiet), args.pretty)
+        return
+    if not args.episode_id:
+        _fail("transcribe requires an episode id or --batch", 2)
+    ep_dir = _find_episode_dir(args.episode_id)
+    if not ep_dir:
+        _fail(f"episode '{args.episode_id}' not found")
+    _out(transcribe_episode(ep_dir, quiet=args.quiet), args.pretty)
+
+
 def cmd_pull(args):
     from .pull import pull
 
@@ -297,6 +313,16 @@ def main(argv=None):
     p.add_argument("--rough", action="store_true",
                    help="fast stream-copy: keyframe-aligned ~10s padding, original quality, trim downstream")
     p.set_defaults(func=cmd_pull)
+
+    p = sub.add_parser("transcribe", help="whisper transcription (single or batch queue)",
+                       parents=[shared])
+    p.add_argument("episode_id", nargs="?")
+    p.add_argument("--batch", action="store_true",
+                   help="process the queue: needs_transcription, then auto, then manual captions")
+    p.add_argument("--source", help="restrict batch to one source")
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_transcribe)
 
     args = parser.parse_args(argv)
 

@@ -43,9 +43,13 @@ def check_ffmpeg():
         print()
 
 
+HOST = os.environ.get("PALETTE_HOST", "127.0.0.1")
+PORT = int(os.environ.get("PALETTE_PORT", "7861"))
+
+
 def open_browser():
     time.sleep(1.8)
-    webbrowser.open("http://127.0.0.1:7861")
+    webbrowser.open(f"http://127.0.0.1:{PORT}")
 
 
 if __name__ == "__main__":
@@ -54,6 +58,7 @@ if __name__ == "__main__":
 
     import uvicorn
 
-    threading.Thread(target=open_browser, daemon=True).start()
-    print("PALETTE running at http://127.0.0.1:7861")
-    uvicorn.run("palette_app.main:app", host="127.0.0.1", port=7861, reload=False)
+    if HOST in ("127.0.0.1", "localhost"):
+        threading.Thread(target=open_browser, daemon=True).start()
+    print(f"PALETTE running at http://{HOST}:{PORT}")
+    uvicorn.run("palette_app.main:app", host=HOST, port=PORT, reload=False)

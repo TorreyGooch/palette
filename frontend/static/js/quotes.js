@@ -122,7 +122,17 @@ const Quotes = {
   },
 
   togglePull(i) {
-    document.getElementById(`q-pull-${i}`).classList.toggle('hidden');
+    const el = document.getElementById(`q-pull-${i}`);
+    el.classList.toggle('hidden');
+    // Opening the form starts caching the episode media in the background,
+    // so by the time palette/person are filled in the download is underway.
+    if (!el.classList.contains('hidden')) {
+      const mode = document.getElementById(`q-pull-mode-${i}`).value;
+      api('/api/qs/warm', {
+        method: 'POST',
+        body: { episode_id: this.hits[i].episode_id, mode },
+      }).catch(() => {});
+    }
   },
 
   init() {
