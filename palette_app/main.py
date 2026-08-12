@@ -476,6 +476,42 @@ def qs_pull_status(job_id: str):
     return job
 
 
+@app.post("/api/qs/cut")
+def qs_cut(body: dict = Body(...)):
+    """Word-accurate cut. Same job/polling contract as /api/qs/pull."""
+    import threading
+    import uuid as _uuid
+    from datetime import datetime as _dt
+
+    from quotesource.cut import cut_quote
+
+    job_id = str(_uuid.uuid4())[:8]
+    job = {"stage": "queued", "started": _dt.now().isoformat(),
+           "done": False, "error": None, "item": None}
+    _pull_jobs[job_id] = job
+
+    def _run_job():
+        try:
+            res = cut_quote(
+                body["episode_id"],
+                float(body["start"]), float(body["end"]),
+                palette_name=body.get("palette") or None,
+                person=body.get("person") or None,
+                model_size=body.get("model") or None,
+                progress_cb=lambda stage: job.__setitem__("stage", stage),
+            )
+            job["item"] = {"title": res["filename"], **res}
+            job["stage"] = "done"
+        except Exception as e:
+            job["error"] = str(e)
+            job["stage"] = "failed"
+        finally:
+            job["done"] = True
+
+    threading.Thread(target=_run_job, daemon=True).start()
+    return {"job_id": job_id}
+
+
 _warming: set = set()
 
 

@@ -187,6 +187,27 @@ def cmd_transcribe(args):
     _out(transcribe_episode(ep_dir, quiet=args.quiet), args.pretty)
 
 
+def cmd_cut(args):
+    from .cut import cut_quote
+
+    res = cut_quote(args.episode_id, args.range[0], args.range[1],
+                    palette_name=args.palette, person=args.person,
+                    model_size=args.model, stage=not args.no_stage,
+                    progress_cb=(None if args.quiet else
+                                 lambda m: print(f"  {m}…", flush=True)))
+    if args.pretty:
+        d = res["cut_diagnostics"]
+        print(f"{res['filename']}  ({res['duration']}s, {len(res['words'])} words)")
+        print(f"  lead silence  {d.get('lead_silence_ms')} ms   "
+              f"trail silence {d.get('trail_silence_ms')} ms")
+        print(f"  head energy   {d.get('head_energy_ratio')}x threshold  "
+              f"(high => may have started mid-consonant)")
+        print(f"  manifest      {res['manifest']}")
+        print(f"  quote: {res['attribution']['quote_text'][:110]}")
+    else:
+        _out(res, False)
+
+
 def cmd_pull(args):
     from .pull import pull
 
@@ -313,6 +334,17 @@ def main(argv=None):
     p.add_argument("--rough", action="store_true",
                    help="fast stream-copy: keyframe-aligned ~10s padding, original quality, trim downstream")
     p.set_defaults(func=cmd_pull)
+
+    p = sub.add_parser("cut", help="word-accurate clip: whisper a window, snap to waveform, manifest",
+                       parents=[shared])
+    p.add_argument("episode_id")
+    p.add_argument("--range", nargs=2, type=float, required=True, metavar=("START", "END"))
+    p.add_argument("--palette")
+    p.add_argument("--person")
+    p.add_argument("--model", help="whisper model for the window (default: env/auto)")
+    p.add_argument("--no-stage", action="store_true", help="write clip + manifest without adding to library")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_cut)
 
     p = sub.add_parser("transcribe", help="whisper transcription (single or batch queue)",
                        parents=[shared])

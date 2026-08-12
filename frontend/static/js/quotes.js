@@ -86,9 +86,10 @@ const Quotes = {
             <option value="av">av</option>
             <option value="audio">audio</option>
           </select>
-          <select id="q-pull-precision-${i}" style="width:190px" title="rough: fast stream copy with ~10s slop each side, original quality — trim with the Clip tools. exact: slower re-encode, clip starts on the quote.">
+          <select id="q-pull-precision-${i}" style="width:210px" title="rough: fast stream copy with ~10s slop, original quality — trim later. exact: re-encoded, starts on the quote. word-accurate: whispers a window and snaps to the waveform, audio only, writes a per-word manifest.">
             <option value="rough">rough (fast, trim later)</option>
             <option value="exact">exact (slow, precise)</option>
+            <option value="word">word-accurate (+manifest)</option>
           </select>
           <input type="text" id="q-pull-palette-${i}" list="q-palette-names"
                  placeholder="palette name…" style="width:160px">
@@ -142,21 +143,24 @@ const Quotes = {
 
   async pull(i) {
     const h = this.hits[i];
+    const precision = document.getElementById(`q-pull-precision-${i}`).value;
+    const wordAccurate = precision === 'word';
     const body = {
       episode_id: h.episode_id,
       start: h.start,
       end: h.end,
       mode: document.getElementById(`q-pull-mode-${i}`).value,
-      rough: document.getElementById(`q-pull-precision-${i}`).value === 'rough',
+      rough: precision === 'rough',
       palette: document.getElementById(`q-pull-palette-${i}`).value.trim(),
       person: document.getElementById(`q-pull-person-${i}`).value.trim(),
     };
+    const endpoint = wordAccurate ? '/api/qs/cut' : '/api/qs/pull';
     const btn = document.querySelector(`#q-pull-${i} button`);
     btn.disabled = true;
 
     let job_id;
     try {
-      ({ job_id } = await api('/api/qs/pull', { method: 'POST', body }));
+      ({ job_id } = await api(endpoint, { method: 'POST', body }));
     } catch (e) {
       toast(e.message, 'error');
       btn.disabled = false;
@@ -178,9 +182,13 @@ const Quotes = {
       btn.disabled = false;
       btn.textContent = 'Stage';
       if (job.error) {
-        toast(`Pull failed: ${job.error}`, 'error');
+        toast(`${wordAccurate ? 'Cut' : 'Pull'} failed: ${job.error}`, 'error');
       } else {
-        toast(`Staged after ${secs}s: ${job.item.title}`, 'success');
+        const d = job.item.cut_diagnostics;
+        const extra = d
+          ? ` · ${job.item.words.length} words, lead ${d.lead_silence_ms}ms`
+          : '';
+        toast(`Staged after ${secs}s: ${job.item.title}${extra}`, 'success');
         document.getElementById(`q-pull-${i}`).classList.add('hidden');
       }
     }, 1500);

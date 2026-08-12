@@ -7,3 +7,4 @@ Pillow>=10.0.0
 PyYAML>=6.0
 feedparser>=6.0
 
+faster-whisper>=1.1.0

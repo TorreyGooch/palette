@@ -60,7 +60,7 @@ def _whisper_config():
 _model_cache: dict = {}
 
 
-def _get_model():
+def _get_model(model_size: str | None = None):
     try:
         from faster_whisper import WhisperModel
     except ImportError:
@@ -70,6 +70,8 @@ def _get_model():
             "ctranslate2 wheels; use a 3.12 venv if 3.14 lacks them)."
         )
     model, device, compute = _whisper_config()
+    if model_size:
+        model = model_size
     key = (model, device, compute)
     if key not in _model_cache:
         _model_cache[key] = WhisperModel(model, device=device, compute_type=compute)

@@ -29,6 +29,7 @@ Two things live in this repo:
 | `qs episode-info <ep>` | full metadata + transcript stats |
 | `qs transcribe <ep>` / `--batch [--source id] [--limit N]` | whisper backfill; resumable, disk-floor guarded |
 | `qs pull <ep> --range a b --mode audio\|av [--rough] [--palette P] [--person X] [--pad s]` | fetch + stage onto a palette |
+| `qs cut <ep> --range a b [--palette P] [--person X] [--model m] [--no-stage]` | word-accurate audio clip + per-word manifest |
 
 Shared filters on grep/search: `--source <id>`, `--person <name>` (matches
 source `people` lists and episode title/description), `--after/--before
@@ -74,6 +75,17 @@ before quoting anywhere.
 - Staged items land in `library.json` with `attribution` (person, show,
   episode, date, timestamped URL, quote text, transcript provenance), tags
   `quotesource` + person, type `audio` or `video`.
+- `qs cut` is the one to use when a quote becomes narration. It whispers a
+  ±15 s window around the range (no full-episode transcription needed),
+  finds true speech onset/offset by energy analysis — never trusting
+  whisper's word times as cut points, since they drift 50–100 ms and clip
+  consonants — and cuts at onset−40 ms / offset+80 ms. Output is an `audio`
+  library item plus a `<clip>.words.json` sidecar holding the attribution
+  payload and per-word timings **relative to the clip's own start**. Read
+  that manifest to place visual beats on specific words.
+  Tunables: `QS_CUT_HEAD_PAD_MS`, `QS_CUT_TAIL_PAD_MS`, `QS_CUT_SEARCH_MS`,
+  `QS_CUT_WINDOW_PAD_S`. `cut_diagnostics` in the manifest reports lead/trail
+  silence and boundary energy so a cut can be checked without listening.
 - Most transcripts are YouTube auto-captions until the whisper backfill
   (Phase 2) runs: expect missing punctuation and occasional mis-hearings;
   verify anything you plan to present as a quote.
