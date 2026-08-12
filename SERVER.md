@@ -117,10 +117,93 @@ Env knobs: `QS_WHISPER_MODEL` (default large-v3 on GPU), `QS_WHISPER_DEVICE`,
 `QS_WHISPER_COMPUTE`, `QS_DISK_FLOOR_GB` (default 20), `QS_EMBED_MODEL`,
 `QS_PULL_MAX_HEIGHT` (default 720), `QS_PULL_CACHE_GB` (default 6).
 
-## Migrating the corpus you already have
+## Moving an existing setup to the server
 
-The corpus is a plain folder — copy
-`C:\Users\torre\Documents\palette\Library` to the server disk and point the
-server's `config.json` `library_path` at it. Then `qs status` there should
-report the same episode counts, and `qs index --rebuild` regenerates the
-SQLite index if you'd rather not copy the large `index/` folder.
+`git pull` brings the **code only**. Three other things have to arrive
+separately, because none of them are in the repo:
+
+| what | where | in git? |
+|---|---|---|
+| code | the repo | yes |
+| corpus (transcripts, audio, index) | `<library>/quotesource/` | no — gitignored |
+| library (media, thumbnails, `library.json`) | `<library>/` | no — gitignored |
+| `config.json` (points at the library) | repo root | no — gitignored |
+
+### 1. Code
+
+```bash
+git clone https://github.com/TorreyGooch/palette
+cd palette && chmod +x qs
+```
+
+### 2. Data
+
+The corpus is a plain folder, so copy it over the tailnet. From the
+Windows machine:
+
+```powershell
+scp -r "C:\Users\torre\Documents\palette\Library" torrey@100.102.79.115:/path/to/palette-library
+```
+
+Only `quotesource/episodes/` and `quotesource/sources.yaml` are
+irreplaceable — they cost hours of throttled ingest. `quotesource/index/`
+regenerates in minutes on the GPU (`qs index && qs embed`) and
+`quotesource/cache/` is disposable, so skip both if you would rather not
+move the bulk.
+
+### 3. Config
+
+Run `python run.py` once and enter the library path, or write
+`config.json` directly:
+
+```json
+{ "library_path": "/path/to/palette-library" }
+```
+
+Verify with `./qs status --pretty` — episode counts should match the
+Windows machine.
+
+## Putting the GPU to work
+
+Installing the two GPU packages is all it takes; the code detects CUDA on
+its own and needs no flags.
+
+```bash
+pip install faster-whisper fastembed-gpu
+pip install nvidia-cublas-cu12 nvidia-cudnn-cu12   # ctranslate2 CUDA deps
+```
+
+That last line is the usual stumbling block: ctranslate2 needs cuBLAS and
+cuDNN, and a missing `libcudnn` shows up as an import or runtime error
+rather than a clean "no GPU" message. Installing them from pip avoids
+depending on a system CUDA install.
+
+What then runs on the GPU:
+
+- **whisper** — `qs transcribe`, `qs cut`, `qs words`. `_whisper_config()`
+  checks `ctranslate2.get_cuda_device_count()` and switches to
+  `large-v3` + `float16` when a device is present (CPU default is the far
+  weaker `base`). ~8–12x realtime instead of ~1x.
+- **embeddings** — `qs embed`, `qs search`. Requests
+  `CUDAExecutionProvider` and silently falls back to CPU if unavailable.
+  Minutes instead of hours for a full corpus.
+
+Confirm both after install:
+
+```bash
+python -c "import ctranslate2; print('cuda devices:', ctranslate2.get_cuda_device_count())"
+./qs status --pretty
+```
+
+A non-zero device count means whisper is on the GPU. If embeddings were
+built with a different model, `qs embed --reset` re-embeds.
+
+ComfyUI and any video model are separate processes — they use the GPU
+already and share it with these jobs, so avoid running a whisper batch
+during a long generation.
+
+### One less hop
+
+If the GPU box is also the machine running the video model, put the
+library there and the hand-off disappears: `qs cut` writes straight into
+a folder the video pipeline can read, with no copying between machines.
