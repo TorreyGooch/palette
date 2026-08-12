@@ -86,6 +86,10 @@ const Quotes = {
             <option value="av">av</option>
             <option value="audio">audio</option>
           </select>
+          <select id="q-pull-precision-${i}" style="width:190px" title="rough: fast stream copy with ~10s slop each side, original quality — trim with the Clip tools. exact: slower re-encode, clip starts on the quote.">
+            <option value="rough">rough (fast, trim later)</option>
+            <option value="exact">exact (slow, precise)</option>
+          </select>
           <input type="text" id="q-pull-palette-${i}" list="q-palette-names"
                  placeholder="palette name…" style="width:160px">
           <input type="text" id="q-pull-person-${i}" placeholder="person…" style="width:140px">
@@ -133,6 +137,7 @@ const Quotes = {
       start: h.start,
       end: h.end,
       mode: document.getElementById(`q-pull-mode-${i}`).value,
+      rough: document.getElementById(`q-pull-precision-${i}`).value === 'rough',
       palette: document.getElementById(`q-pull-palette-${i}`).value.trim(),
       person: document.getElementById(`q-pull-person-${i}`).value.trim(),
     };

@@ -453,6 +453,7 @@ def qs_pull(body: dict = Body(...)):
                 palette_name=body.get("palette") or None,
                 person=body.get("person") or None,
                 pad=float(body.get("pad") or 0),
+                rough=bool(body.get("rough", False)),
                 progress_cb=lambda stage: job.__setitem__("stage", stage),
             )
             job["stage"] = "done"

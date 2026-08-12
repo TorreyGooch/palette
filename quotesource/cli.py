@@ -176,7 +176,7 @@ def cmd_pull(args):
 
     item = pull(args.episode_id, args.range[0], args.range[1],
                 mode=args.mode, palette_name=args.palette,
-                person=args.person, pad=args.pad)
+                person=args.person, pad=args.pad, rough=args.rough)
     _out(item, args.pretty)
 
 
@@ -294,6 +294,8 @@ def main(argv=None):
     p.add_argument("--palette", help="palette name (created if missing)")
     p.add_argument("--person", help="speaker for attribution + tag")
     p.add_argument("--pad", type=float, default=0.0, help="extra seconds each side after snapping")
+    p.add_argument("--rough", action="store_true",
+                   help="fast stream-copy: keyframe-aligned ~10s padding, original quality, trim downstream")
     p.set_defaults(func=cmd_pull)
 
     args = parser.parse_args(argv)

@@ -47,15 +47,24 @@ def snap_range(segments: list[dict], start: float, end: float) -> dict:
     }
 
 
+ROUGH_PAD_S = 10.0
+
+
 async def _fetch_youtube_section(url: str, start: float, end: float,
-                                 mode: str, dest: Path) -> bool:
-    """Download a padded section, then cut to the exact range."""
+                                 mode: str, dest: Path,
+                                 rough: bool = False) -> bool:
+    """Download a padded section; exact mode re-encodes to the precise range,
+    rough mode keeps the keyframe-aligned section as-is (fast, original
+    quality, quote sits a few seconds inside)."""
+    import shutil as _shutil
+
     import yt_dlp
 
     from palette_app.api.media import extract_clip, _run
 
-    sec_start = max(0.0, start - FETCH_PAD_S)
-    sec_end = end + FETCH_PAD_S
+    pad = ROUGH_PAD_S if rough else FETCH_PAD_S
+    sec_start = max(0.0, start - pad)
+    sec_end = end + pad
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp) / ("section.mp4" if mode == "av" else "section.m4a")
@@ -69,7 +78,10 @@ async def _fetch_youtube_section(url: str, start: float, end: float,
             "outtmpl": str(tmp_path),
             "download_ranges": yt_dlp.utils.download_range_func(
                 None, [[sec_start, sec_end]]),
-            "force_keyframes_at_cuts": True,
+            # exact mode: force keyframes so the section starts precisely at
+            # sec_start and our offset math holds. rough mode: skip the
+            # re-encode entirely and accept keyframe-aligned boundaries.
+            "force_keyframes_at_cuts": not rough,
         }
         if mode == "av":
             opts["merge_output_format"] = "mp4"
@@ -86,6 +98,10 @@ async def _fetch_youtube_section(url: str, start: float, end: float,
             if not cand:
                 return False
             tmp_path = cand[0]
+
+        if rough:
+            _shutil.move(str(tmp_path), str(dest))
+            return dest.exists()
 
         offset = start - sec_start
         dur = end - start
@@ -111,7 +127,7 @@ async def _fetch_rss_audio(audio_url: str, start: float, end: float,
 
 def pull(episode_id: str, start: float, end: float, mode: str = "av",
          palette_name: str | None = None, person: str | None = None,
-         pad: float = 0.0, progress_cb=None) -> dict:
+         pad: float = 0.0, rough: bool = False, progress_cb=None) -> dict:
     """Snap, fetch, stage. Returns staged item JSON (with attribution).
     progress_cb, if given, receives stage strings as work proceeds."""
     from palette_app.config import get_library_path
@@ -146,15 +162,16 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
     dest = lib_root / "media" / filename
 
     url = meta.get("url", "")
-    _progress(f"downloading {mode} section ({e - s:.0f}s span — the slow part)")
+    kind = "rough (stream copy)" if rough else "exact (re-encoded)"
+    _progress(f"downloading {mode} section, {kind} ({e - s:.0f}s span)")
     if meta.get("source_id") and url.startswith("http") and "youtube" in url:
-        ok = asyncio.run(_fetch_youtube_section(url, s, e, mode, dest))
+        ok = asyncio.run(_fetch_youtube_section(url, s, e, mode, dest, rough))
     elif mode == "audio" and meta.get("audio_url"):
         ok = asyncio.run(_fetch_rss_audio(meta["audio_url"], s, e, dest))
     elif meta.get("audio_url"):
         raise ValueError("av mode is not available for RSS episodes (audio only)")
     else:
-        ok = asyncio.run(_fetch_youtube_section(url, s, e, mode, dest))
+        ok = asyncio.run(_fetch_youtube_section(url, s, e, mode, dest, rough))
     if not ok:
         raise RuntimeError("segment fetch/cut failed")
 
@@ -175,6 +192,7 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
         "episode_date": meta.get("upload_date"),
         "source_url_ts": _ts_url(url, s),
         "range": [round(s, 3), round(e, 3)],
+        "precision": "rough" if rough else "exact",
         "quote_text": snapped["quote_text"],
         "transcript_provenance": transcript.get("transcript_source"),
     }
