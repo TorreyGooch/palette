@@ -198,10 +198,14 @@ def cmd_cut(args):
     if args.pretty:
         d = res["cut_diagnostics"]
         print(f"{res['filename']}  ({res['duration']}s, {len(res['words'])} words)")
-        print(f"  lead silence  {d.get('lead_silence_ms')} ms   "
-              f"trail silence {d.get('trail_silence_ms')} ms")
-        print(f"  head energy   {d.get('head_energy_ratio')}x threshold  "
-              f"(high => may have started mid-consonant)")
+        print(f"  head  {'clean onset' if d.get('head_clean') else 'NO CLEAR ONSET'}"
+              f"   lead silence {d.get('lead_silence_ms')} ms"
+              f"   energy {d.get('head_energy_ratio')}x threshold")
+        tail = ("clean pause" if d.get('tail_clean')
+                else f"RUN-ON (faded {d.get('tail_faded_ms')} ms)")
+        print(f"  tail  {tail}   trail silence {d.get('trail_silence_ms')} ms")
+        if d.get("words_dropped_at_edges"):
+            print(f"  dropped {d['words_dropped_at_edges']} partial word(s) at edges")
         print(f"  manifest      {res['manifest']}")
         print(f"  quote: {res['attribution']['quote_text'][:110]}")
     else:

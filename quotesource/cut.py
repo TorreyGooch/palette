@@ -29,6 +29,17 @@ TAIL_PAD_MS = float(os.environ.get("QS_CUT_TAIL_PAD_MS", "80"))
 # How far around the word-level boundary to hunt for the real speech edge.
 SEARCH_MS = float(os.environ.get("QS_CUT_SEARCH_MS", "200"))
 
+# A gap this long counts as a pause; shorter gaps are within-word breaks
+# (stop consonants) and must not be mistaken for the end of the phrase.
+MIN_SILENCE_MS = float(os.environ.get("QS_CUT_MIN_SILENCE_MS", "70"))
+
+# How far past the requested boundary we may go looking for a real pause.
+EXTEND_MS = float(os.environ.get("QS_CUT_EXTEND_MS", "1200"))
+
+# Applied at the tail when no natural pause exists within reach, so a
+# run-on speaker doesn't end in a hard truncation click.
+FADE_MS = float(os.environ.get("QS_CUT_FADE_MS", "35"))
+
 # Context given to whisper around the quote so word alignment near the
 # boundaries has real audio on both sides (interior timings are the ones we
 # trust; the padding exists to keep the edges out of the extrapolated zone).
@@ -106,53 +117,106 @@ def _threshold(rms):
     return max(floor * 3.0, floor + (peak - floor) * 0.08)
 
 
-def snap_to_speech(rms, frame_s: float, region_start: float,
-                   region_end: float) -> tuple[float, float]:
-    """Find true speech onset/offset near a word-level region.
+def _speech_runs(rms, frame_s: float):
+    """Contiguous speech runs as (start_idx, end_idx_exclusive).
 
-    Times are relative to the analysed window. Falls back to the requested
-    boundaries when no clear edge is found.
+    Gaps shorter than MIN_SILENCE_MS are closed first, so the stop inside
+    "black dot" doesn't read as the end of the phrase.
+    """
+    import numpy as np
+
+    thresh = _threshold(rms)
+    speech = rms > thresh
+    min_sil = max(1, int((MIN_SILENCE_MS / 1000.0) / frame_s))
+    min_run = max(1, int((MIN_SPEECH_MS / 1000.0) / frame_s))
+
+    # close short gaps
+    closed = speech.copy()
+    i = 0
+    while i < closed.size:
+        if not closed[i]:
+            j = i
+            while j < closed.size and not closed[j]:
+                j += 1
+            if i > 0 and j < closed.size and (j - i) < min_sil:
+                closed[i:j] = True
+            i = j
+        else:
+            i += 1
+
+    runs = []
+    i = 0
+    while i < closed.size:
+        if closed[i]:
+            j = i
+            while j < closed.size and closed[j]:
+                j += 1
+            if (j - i) >= min_run:
+                runs.append((i, j))
+            i = j
+        else:
+            i += 1
+    return runs
+
+
+def snap_to_speech(rms, frame_s: float, region_start: float,
+                   region_end: float) -> dict:
+    """Find true speech onset/offset around a word-level region.
+
+    Rather than taking the last loud frame in a fixed window — which just
+    cuts wherever the window happens to fall when a speaker runs on — this
+    locates the speech *run* containing each boundary and uses its true
+    edges. When the run continues past EXTEND_MS beyond the requested end
+    there is no natural pause to land on; that is reported rather than
+    papered over, and the caller fades the tail.
     """
     import numpy as np
 
     if rms.size == 0:
-        return region_start, region_end
+        return {"onset": region_start, "offset": region_end,
+                "head_clean": False, "tail_clean": False}
 
-    thresh = _threshold(rms)
+    runs = _speech_runs(rms, frame_s)
+    if not runs:
+        return {"onset": region_start, "offset": region_end,
+                "head_clean": False, "tail_clean": False}
+
     search = SEARCH_MS / 1000.0
-    min_run = max(1, int((MIN_SPEECH_MS / 1000.0) / frame_s))
+    extend = EXTEND_MS / 1000.0
 
-    def idx(t):
-        return int(np.clip(round(t / frame_s), 0, rms.size - 1))
+    def t(i):
+        return i * frame_s
 
-    # Onset: first sustained run of speech inside the search band.
-    lo, hi = idx(region_start - search), idx(region_start + search)
-    onset = None
-    for i in range(lo, hi + 1):
-        if rms[i] > thresh and np.all(rms[i:i + min_run] > thresh):
-            onset = i * frame_s
+    # ── onset: start of the run covering region_start, else the next run
+    onset, head_clean = region_start, False
+    for a, b in runs:
+        if t(a) <= region_start + search and t(b) > region_start:
+            onset, head_clean = t(a), True
             break
-    if onset is None:
-        # already mid-speech at the band start: walk back to the last silence
-        i = idx(region_start)
-        while i > lo and rms[i] > thresh:
-            i -= 1
-        onset = i * frame_s if i > lo else region_start
-
-    # Offset: last sustained speech frame in the band.
-    lo2, hi2 = idx(region_end - search), idx(region_end + search)
-    offset = None
-    for i in range(hi2, lo2 - 1, -1):
-        j = max(0, i - min_run + 1)
-        if rms[i] > thresh and np.all(rms[j:i + 1] > thresh):
-            offset = (i + 1) * frame_s
+        if t(a) > region_start:
+            if t(a) - region_start <= search:
+                onset, head_clean = t(a), True
             break
-    if offset is None:
-        offset = region_end
+
+    # ── offset: end of the run covering region_end
+    offset, tail_clean = region_end, False
+    for a, b in runs:
+        if t(a) <= region_end and t(b) >= region_end - search:
+            if t(b) - region_end <= extend:
+                offset, tail_clean = t(b), True
+            else:
+                # speaker runs on well past the quote: no pause to land on
+                offset, tail_clean = region_end, False
+            break
+        if t(a) > region_end:
+            offset, tail_clean = region_end, False
+            break
 
     if offset <= onset:
-        return region_start, region_end
-    return onset, offset
+        return {"onset": region_start, "offset": region_end,
+                "head_clean": False, "tail_clean": False}
+    return {"onset": onset, "offset": offset,
+            "head_clean": head_clean, "tail_clean": tail_clean}
 
 
 def edge_report(rms, frame_s: float, cut_start: float, cut_end: float) -> dict:
@@ -257,24 +321,37 @@ def cut_quote(episode_id: str, start: float, end: float,
 
         _progress("snapping to speech boundaries")
         rms, frame_s = _frame_rms(wav)
-        onset, offset = snap_to_speech(rms, frame_s, w_start, w_end)
+        snap = snap_to_speech(rms, frame_s, w_start, w_end)
+        onset, offset = snap["onset"], snap["offset"]
 
         cut_start = max(0.0, onset - HEAD_PAD_MS / 1000.0)
         cut_end = min(win_dur, offset + TAIL_PAD_MS / 1000.0)
         report = edge_report(rms, frame_s, cut_start, cut_end)
+        report["head_clean"] = snap["head_clean"]
+        report["tail_clean"] = snap["tail_clean"]
 
     duration = cut_end - cut_start
     abs_start = win_start + cut_start
     abs_end = win_start + cut_end
 
-    # words that survive into the clip, re-based to the clip's own start
-    clip_words = [
-        {"word": w["word"],
-         "start": round(w["start"] - cut_start, 3),
-         "end": round(w["end"] - cut_start, 3)}
-        for w in words
-        if w["end"] > cut_start and w["start"] < cut_end
-    ]
+    # Words re-based to the clip's own start. A word must be essentially
+    # whole to appear here: a half-audible word at either edge would put a
+    # downstream visual beat on audio the clip does not contain.
+    clip_words = []
+    dropped = 0
+    for w in words:
+        if w["end"] <= cut_start or w["start"] >= cut_end:
+            continue
+        span = w["end"] - w["start"]
+        inside = min(w["end"], cut_end) - max(w["start"], cut_start)
+        if span > 0 and inside / span < 0.6:
+            dropped += 1
+            continue
+        clip_words.append({
+            "word": w["word"],
+            "start": round(max(0.0, w["start"] - cut_start), 3),
+            "end": round(min(cut_end, w["end"]) - cut_start, 3),
+        })
     quote_text = " ".join(w["word"] for w in clip_words)
 
     lib_root = get_library_path()
@@ -284,11 +361,13 @@ def cut_quote(episode_id: str, start: float, end: float,
     filename = f"qs_cut_{episode_id}_{int(abs_start)}_{int(abs_end)}.m4a"
     dest = lib_root / "media" / filename
     _progress("cutting clip")
-    subprocess.run(
-        ["ffmpeg", "-y", "-ss", str(abs_start), "-i", str(src),
-         "-t", str(duration), "-c:a", "aac", "-b:a", "192k", "-vn", str(dest)],
-        check=True, capture_output=True,
-    )
+    cmd = ["ffmpeg", "-y", "-ss", str(abs_start), "-i", str(src),
+           "-t", str(duration)]
+    if not report.get("tail_clean") and FADE_MS > 0:
+        fade = FADE_MS / 1000.0
+        cmd += ["-af", f"afade=t=out:st={max(0.0, duration - fade):.3f}:d={fade:.3f}"]
+    cmd += ["-c:a", "aac", "-b:a", "192k", "-vn", str(dest)]
+    subprocess.run(cmd, check=True, capture_output=True)
 
     url = meta.get("url", "")
     attribution = {
@@ -312,6 +391,8 @@ def cut_quote(episode_id: str, start: float, end: float,
         "words": clip_words,
         "cut_diagnostics": {
             **report,
+            "words_dropped_at_edges": dropped,
+            "tail_faded_ms": (FADE_MS if not report.get("tail_clean") else 0),
             "head_pad_ms": HEAD_PAD_MS,
             "tail_pad_ms": TAIL_PAD_MS,
             "word_region": [round(win_start + w_start, 3),
