@@ -111,13 +111,19 @@ async def _fetch_rss_audio(audio_url: str, start: float, end: float,
 
 def pull(episode_id: str, start: float, end: float, mode: str = "av",
          palette_name: str | None = None, person: str | None = None,
-         pad: float = 0.0) -> dict:
-    """Snap, fetch, stage. Returns staged item JSON (with attribution)."""
+         pad: float = 0.0, progress_cb=None) -> dict:
+    """Snap, fetch, stage. Returns staged item JSON (with attribution).
+    progress_cb, if given, receives stage strings as work proceeds."""
     from palette_app.config import get_library_path
     from palette_app.library import (
         load_library, save_library, new_palette, register_media_file,
     )
 
+    def _progress(stage: str):
+        if progress_cb:
+            progress_cb(stage)
+
+    _progress("reading transcript")
     ep_dir = _find_episode_dir(episode_id)
     if not ep_dir:
         raise FileNotFoundError(f"episode '{episode_id}' not found")
@@ -140,6 +146,7 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
     dest = lib_root / "media" / filename
 
     url = meta.get("url", "")
+    _progress(f"downloading {mode} section ({e - s:.0f}s span — the slow part)")
     if meta.get("source_id") and url.startswith("http") and "youtube" in url:
         ok = asyncio.run(_fetch_youtube_section(url, s, e, mode, dest))
     elif mode == "audio" and meta.get("audio_url"):
@@ -151,6 +158,7 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
     if not ok:
         raise RuntimeError("segment fetch/cut failed")
 
+    _progress("registering in library")
     quote_short = snapped["quote_text"][:70].rstrip()
     title = f'“{quote_short}…” — {meta.get("title", episode_id)[:60]}'
     item = asyncio.run(register_media_file(lib_root, filename, title))

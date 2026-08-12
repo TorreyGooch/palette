@@ -136,18 +136,39 @@ const Quotes = {
       palette: document.getElementById(`q-pull-palette-${i}`).value.trim(),
       person: document.getElementById(`q-pull-person-${i}`).value.trim(),
     };
-    const btns = document.querySelectorAll(`#q-pull-${i} button`);
-    btns.forEach(b => { b.disabled = true; b.textContent = 'Staging…'; });
-    toast('Fetching segment — this downloads from the source, give it a minute…');
+    const btn = document.querySelector(`#q-pull-${i} button`);
+    btn.disabled = true;
+
+    let job_id;
     try {
-      const item = await api('/api/qs/pull', { method: 'POST', body });
-      toast(`Staged: ${item.title}`, 'success');
-      document.getElementById(`q-pull-${i}`).classList.add('hidden');
+      ({ job_id } = await api('/api/qs/pull', { method: 'POST', body }));
     } catch (e) {
       toast(e.message, 'error');
-    } finally {
-      btns.forEach(b => { b.disabled = false; b.textContent = 'Stage'; });
+      btn.disabled = false;
+      return;
     }
+
+    const t0 = Date.now();
+    const poll = setInterval(async () => {
+      let job;
+      try {
+        job = await api(`/api/qs/pull/${job_id}`);
+      } catch { return; }  // transient poll failure; keep trying
+      const secs = Math.round((Date.now() - t0) / 1000);
+      if (!job.done) {
+        btn.textContent = `${job.stage} · ${secs}s`;
+        return;
+      }
+      clearInterval(poll);
+      btn.disabled = false;
+      btn.textContent = 'Stage';
+      if (job.error) {
+        toast(`Pull failed: ${job.error}`, 'error');
+      } else {
+        toast(`Staged after ${secs}s: ${job.item.title}`, 'success');
+        document.getElementById(`q-pull-${i}`).classList.add('hidden');
+      }
+    }, 1500);
   },
 };
 

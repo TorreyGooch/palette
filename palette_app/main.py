@@ -427,24 +427,51 @@ def qs_context(episode_id: str, start: float, end: float, window: float = 20.0):
         raise HTTPException(404, str(e))
 
 
+# Pull runs as a job: POST starts it, GET polls stage/elapsed/result.
+_pull_jobs: dict = {}
+
+
 @app.post("/api/qs/pull")
 def qs_pull(body: dict = Body(...)):
+    import threading
+    import uuid as _uuid
+    from datetime import datetime as _dt
+
     from quotesource.pull import pull
 
-    try:
-        item = pull(
-            body["episode_id"],
-            float(body["start"]), float(body["end"]),
-            mode=body.get("mode", "av"),
-            palette_name=body.get("palette") or None,
-            person=body.get("person") or None,
-            pad=float(body.get("pad") or 0),
-        )
-        return item
-    except (FileNotFoundError, ValueError) as e:
-        raise HTTPException(404, str(e))
-    except Exception as e:
-        raise HTTPException(500, str(e))
+    job_id = str(_uuid.uuid4())[:8]
+    job = {"stage": "queued", "started": _dt.now().isoformat(),
+           "done": False, "error": None, "item": None}
+    _pull_jobs[job_id] = job
+
+    def _run_job():
+        try:
+            job["item"] = pull(
+                body["episode_id"],
+                float(body["start"]), float(body["end"]),
+                mode=body.get("mode", "av"),
+                palette_name=body.get("palette") or None,
+                person=body.get("person") or None,
+                pad=float(body.get("pad") or 0),
+                progress_cb=lambda stage: job.__setitem__("stage", stage),
+            )
+            job["stage"] = "done"
+        except Exception as e:
+            job["error"] = str(e)
+            job["stage"] = "failed"
+        finally:
+            job["done"] = True
+
+    threading.Thread(target=_run_job, daemon=True).start()
+    return {"job_id": job_id}
+
+
+@app.get("/api/qs/pull/{job_id}")
+def qs_pull_status(job_id: str):
+    job = _pull_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "unknown job")
+    return job
 
 
 @app.get("/api/exports")
