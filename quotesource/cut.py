@@ -33,8 +33,15 @@ SEARCH_MS = float(os.environ.get("QS_CUT_SEARCH_MS", "200"))
 # (stop consonants) and must not be mistaken for the end of the phrase.
 MIN_SILENCE_MS = float(os.environ.get("QS_CUT_MIN_SILENCE_MS", "70"))
 
-# How far past the requested boundary we may go looking for a real pause.
-EXTEND_MS = float(os.environ.get("QS_CUT_EXTEND_MS", "1200"))
+# Tail: how far past the requested end we may go looking for a real pause.
+# Kept short on purpose — a generous value walks forward to the next pause
+# and drags whole extra words in with it ("...blew me away. You know, it's
+# so,"). Better to stop where asked and fade than to change the quote.
+EXTEND_MS = float(os.environ.get("QS_CUT_EXTEND_MS", "300"))
+
+# Head: how far forward we may snap to reach speech. Generous, because
+# skipping leading silence only ever removes dead air — it cannot add words.
+HEAD_SNAP_MS = float(os.environ.get("QS_CUT_HEAD_SNAP_MS", "1500"))
 
 # Applied at the tail when no natural pause exists within reach, so a
 # run-on speaker doesn't end in a hard truncation click.
@@ -196,7 +203,7 @@ def snap_to_speech(rms, frame_s: float, region_start: float,
             onset, head_clean = t(a), True
             break
         if t(a) > region_start:
-            if t(a) - region_start <= extend:
+            if t(a) - region_start <= HEAD_SNAP_MS / 1000.0:
                 onset, head_clean = t(a), True
             break
 
@@ -244,7 +251,11 @@ def edge_report(rms, frame_s: float, cut_start: float, cut_end: float) -> dict:
     def idx(t):
         return int(np.clip(round(t / frame_s), 0, rms.size - 1))
 
-    a, b = idx(cut_start), idx(cut_end)
+    # Exclude the frame straddling cut_end: it can contain the first sample
+    # of the next utterance and report 0ms trailing silence for a clip whose
+    # audio actually decays cleanly.
+    a = idx(cut_start)
+    b = max(a, int(cut_end / frame_s) - 1)
     seg = rms[a:b + 1]
     if seg.size == 0:
         return {}
@@ -345,7 +356,9 @@ def cut_quote(episode_id: str, start: float, end: float,
             cut_start = max(cut_start, snap["prev_end"] + 0.005)
         cut_end = min(win_dur, offset + TAIL_PAD_MS / 1000.0)
         if snap.get("next_start") is not None:
-            cut_end = min(cut_end, snap["next_start"] - 0.005)
+            # leave part of the pause intact rather than butting against the
+            # next word, when the pause is shorter than the pad
+            cut_end = min(cut_end, offset + (snap["next_start"] - offset) * 0.6)
         report = edge_report(rms, frame_s, cut_start, cut_end)
         report["head_clean"] = snap["head_clean"]
         report["tail_clean"] = snap["tail_clean"]
