@@ -187,6 +187,23 @@ def cmd_transcribe(args):
     _out(transcribe_episode(ep_dir, quiet=args.quiet), args.pretty)
 
 
+def cmd_words(args):
+    from .cut import word_map
+
+    res = word_map(args.episode_id, args.range[0], args.range[1],
+                   pad=args.pad, model_size=args.model)
+    if args.pretty:
+        for w in res["words"]:
+            mark = ""
+            if w["gap_before"] and w["gap_before"] >= 0.15:
+                mark = f"   <== PAUSE {w['gap_before']*1000:.0f}ms"
+            print(f"{w['start']:9.2f}  {w['word']:<18}{mark}")
+        print(f"\n{len(res['pauses'])} pause(s) >=150ms — cut just before one "
+              f"for a clean tail")
+    else:
+        _out(res, False)
+
+
 def cmd_cut(args):
     from .cut import cut_quote
 
@@ -338,6 +355,14 @@ def main(argv=None):
     p.add_argument("--rough", action="store_true",
                    help="fast stream-copy: keyframe-aligned ~10s padding, original quality, trim downstream")
     p.set_defaults(func=cmd_pull)
+
+    p = sub.add_parser("words", help="word timings + pauses for a region (pick cut boundaries with this)",
+                       parents=[shared])
+    p.add_argument("episode_id")
+    p.add_argument("--range", nargs=2, type=float, required=True, metavar=("START", "END"))
+    p.add_argument("--pad", type=float, default=3.0, help="seconds of context each side (default 3)")
+    p.add_argument("--model", help="whisper model (default: env/auto; use small or better)")
+    p.set_defaults(func=cmd_words)
 
     p = sub.add_parser("cut", help="word-accurate clip: whisper a window, snap to waveform, manifest",
                        parents=[shared])

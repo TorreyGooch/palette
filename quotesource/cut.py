@@ -296,6 +296,49 @@ def window_words(wav_path: Path, model_size: str | None = None) -> list[dict]:
     return words
 
 
+def word_map(episode_id: str, start: float, end: float,
+             pad: float = 3.0, model_size: str | None = None) -> dict:
+    """Word timings and the pauses between them, in absolute source time.
+
+    Use this to choose cut boundaries: `qs cut` ends where you tell it, and
+    the natural place to end is just before a pause. Caption timestamps are
+    too coarse to see those.
+    """
+    ep_dir = _find_episode_dir(episode_id)
+    if not ep_dir:
+        raise FileNotFoundError(f"episode '{episode_id}' not found")
+    src = _source_media(episode_id, ep_dir)
+
+    win_start = max(0.0, start - pad)
+    win_dur = (end + pad) - win_start
+
+    with tempfile.TemporaryDirectory() as tmp:
+        wav = Path(tmp) / "w.wav"
+        _decode_window(src, win_start, win_dur, wav)
+        words = window_words(wav, model_size)
+
+    out, prev_end = [], None
+    for w in words:
+        gap = None if prev_end is None else round(w["start"] - prev_end, 3)
+        out.append({
+            "word": w["word"],
+            "start": round(win_start + w["start"], 3),
+            "end": round(win_start + w["end"], 3),
+            "gap_before": gap,
+        })
+        prev_end = w["end"]
+
+    pauses = [
+        {"after_word": out[i - 1]["word"], "at": out[i - 1]["end"],
+         "gap": w["gap_before"]}
+        for i, w in enumerate(out)
+        if i > 0 and w["gap_before"] and w["gap_before"] >= 0.15
+    ]
+    return {"episode_id": episode_id, "window": [round(win_start, 3),
+                                                 round(win_start + win_dur, 3)],
+            "words": out, "pauses": pauses}
+
+
 def _match_quote_region(words: list[dict], want_start: float,
                         want_end: float) -> tuple[float, float]:
     """Word-level region covering the requested span."""

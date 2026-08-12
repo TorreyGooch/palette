@@ -29,6 +29,7 @@ Two things live in this repo:
 | `qs episode-info <ep>` | full metadata + transcript stats |
 | `qs transcribe <ep>` / `--batch [--source id] [--limit N]` | whisper backfill; resumable, disk-floor guarded |
 | `qs pull <ep> --range a b --mode audio\|av [--rough] [--palette P] [--person X] [--pad s]` | fetch + stage onto a palette |
+| `qs words <ep> --range a b [--pad s]` | word timings + pauses; use to pick cut boundaries |
 | `qs cut <ep> --range a b [--palette P] [--person X] [--model m] [--no-stage]` | word-accurate audio clip + per-word manifest |
 
 Shared filters on grep/search: `--source <id>`, `--person <name>` (matches
@@ -75,18 +76,91 @@ before quoting anywhere.
 - Staged items land in `library.json` with `attribution` (person, show,
   episode, date, timestamped URL, quote text, transcript provenance), tags
   `quotesource` + person, type `audio` or `video`.
-- `qs cut` is the one to use when a quote becomes narration. It whispers a
-  ±15 s window around the range (no full-episode transcription needed),
-  finds true speech onset/offset by energy analysis — never trusting
-  whisper's word times as cut points, since they drift 50–100 ms and clip
-  consonants — and cuts at onset−40 ms / offset+80 ms. Output is an `audio`
-  library item plus a `<clip>.words.json` sidecar holding the attribution
-  payload and per-word timings **relative to the clip's own start**. Read
-  that manifest to place visual beats on specific words.
-  Tunables: `QS_CUT_HEAD_PAD_MS`, `QS_CUT_TAIL_PAD_MS`, `QS_CUT_SEARCH_MS`,
-  `QS_CUT_WINDOW_PAD_S`. `cut_diagnostics` in the manifest reports lead/trail
-  silence and boundary energy so a cut can be checked without listening.
+- `qs cut` is the one to use when a quote becomes narration. See
+  "Cutting quotes for narration" below — it has the full workflow.
 - Most transcripts are YouTube auto-captions until the whisper backfill
   (Phase 2) runs: expect missing punctuation and occasional mis-hearings;
   verify anything you plan to present as a quote.
 - After any `qs ingest`, run `qs index` then `qs embed` (both incremental).
+
+## Cutting quotes for narration
+
+Use `small` or better — `base` mis-hears (it produced "black dog" for
+"black dot"). Set it once: `QS_WHISPER_MODEL=small`.
+
+**The workflow, in order. Step 2 is the one that is easy to skip and
+should not be.**
+
+```bash
+# 1. find the quote (caption-quality search is enough to locate it)
+qs search "a defeated lobster given antidepressants" --limit 5 --pretty
+
+# 2. look at the real word timings and pauses before choosing boundaries
+qs words PWasTAtR6Ns --range 477 490 --pretty
+#    477.42  if
+#    ...
+#    486.86  away.
+#    487.44  You                  <== PAUSE 240ms
+
+# 3. cut ending just before a pause
+qs cut PWasTAtR6Ns --range 477.45 487.15 \
+    --palette "Narration" --person "Jordan Peterson" --pretty
+```
+
+Why step 2 matters: `qs cut` ends where you tell it. It will extend only
+`QS_CUT_EXTEND_MS` (300 ms) looking for a pause, then stop and fade. Pick
+an end that already sits just before a real pause and the tail is clean;
+guess from caption timestamps and you get a faded run-on, or a trailing
+fragment like "You know, it's so,". Caption timestamps are far too coarse
+to see pauses — that is what `qs words` is for.
+
+**Reading the output.** `head_clean` / `tail_clean` are the two that
+matter. `tail_clean: false` means no natural pause existed and the tail
+was faded (`tail_faded_ms`) — usable, but a real pause is better, so
+consider moving the end. `words_dropped_at_edges > 0` means a partial
+word was excluded from the manifest; check the quote still reads whole.
+`lead_silence_ms` much above the head pad means dead air.
+
+**Tunables** (all env vars): `QS_CUT_HEAD_PAD_MS` (40),
+`QS_CUT_TAIL_PAD_MS` (80), `QS_CUT_SEARCH_MS` (200),
+`QS_CUT_MIN_SILENCE_MS` (70, what counts as a pause),
+`QS_CUT_EXTEND_MS` (300, tail reach), `QS_CUT_HEAD_SNAP_MS` (1500, how
+far forward the head may snap to skip dead air), `QS_CUT_FADE_MS` (35),
+`QS_CUT_WINDOW_PAD_S` (15, whisper context).
+
+### The manifest
+
+`qs cut` writes `<clip>.words.json` beside the audio. This is the
+downstream contract — it is what lets visual beats land on specific words.
+
+```jsonc
+{
+  "clip": "qs_cut_<ep>_<start>_<end>.m4a",
+  "duration": 10.34,                     // seconds
+  "created": "2026-08-12T09:46:30",
+  "attribution": {
+    "person": "Jordan Peterson",
+    "show": "jordanpeterson",            // source id in sources.yaml
+    "episode_id": "7InNdewQwwc",
+    "episode_title": "...",
+    "episode_date": "20240619",          // YYYYMMDD
+    "source_url_ts": "https://...&t=225s",
+    "range": [225.32, 235.66],           // absolute seconds in the episode
+    "precision": "word_accurate",
+    "quote_text": "...",                 // exactly the words in the clip
+    "transcript_provenance": "whisper_window"
+  },
+  "words": [                             // TIMES ARE RELATIVE TO THE CLIP
+    {"word": "the", "start": 0.02, "end": 0.1}
+  ],
+  "cut_diagnostics": { "head_clean": true, "tail_clean": true,
+                       "tail_faded_ms": 0, "words_dropped_at_edges": 0,
+                       "lead_silence_ms": 40.0, "trail_silence_ms": 80.0 }
+}
+```
+
+**`words[].start` / `.end` are relative to the clip's own first sample
+(0 = clip start), not to the source episode.** Use them directly against
+the audio file. `attribution.range` is the only field in episode time.
+Every word listed is fully present in the audio; partial words at the
+edges are dropped rather than reported with times that run past the end.
