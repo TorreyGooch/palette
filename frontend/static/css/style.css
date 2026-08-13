@@ -861,3 +861,18 @@ video {
 }
 .export-entry .exp-name { font-weight: 600; flex: 1; }
 .export-entry .exp-meta { font-size: 12px; color: var(--muted); }
+
+/* Corpus server control. The dot is the whole status at a glance: the
+   server is started on demand, so "is it up right now" is a real question
+   rather than an implementation detail. */
+.server-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  display: inline-block; flex: 0 0 auto;
+}
+.server-dot--up      { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.server-dot--down    { background: var(--red); }
+.server-dot--unknown { background: var(--muted); }
+.server-dot--busy    { background: var(--muted); animation: server-pulse 1s ease-in-out infinite; }
+@keyframes server-pulse { 0%,100% { opacity: .3 } 50% { opacity: 1 } }
+
+#q-server-meters span { margin-right: 14px; white-space: nowrap; }

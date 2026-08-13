@@ -711,6 +711,80 @@ def qs_pull(body: dict = Body(...)):
     return {"job_id": job_id}
 
 
+# ── Controlling the corpus API from here ──────────────────────────────────────
+# The server API is started on demand: that box shares memory and GPU with
+# generation, so it should not idle there holding an embedding model. To
+# start something that is not running, ssh is the only channel available -
+# an always-on supervisor would be the very thing we are avoiding.
+
+SERVER_ACTIONS = ("start", "stop", "restart", "status")
+
+
+def _server_ssh() -> Optional[str]:
+    """user@host for the corpus machine, inferred from QS_REMOTE if unset."""
+    explicit = (os.environ.get("QS_SERVER_SSH") or "").strip()
+    if explicit:
+        return explicit
+    from .qs_remote import remote_base
+
+    base = remote_base()
+    if not base:
+        return None
+    host = base.split("://", 1)[-1].split("/")[0].split(":")[0]
+    user = os.environ.get("QS_SERVER_USER", "torrey")
+    return f"{user}@{host}"
+
+
+def _run_server_action(action: str) -> dict:
+    import subprocess
+
+    # Whitelisted above; nothing from the request is interpolated into the
+    # command, so there is no shell for a caller to reach.
+    if action not in SERVER_ACTIONS:
+        raise HTTPException(400, f"action must be one of {SERVER_ACTIONS}")
+
+    target = _server_ssh()
+    if not target:
+        raise HTTPException(409, "no corpus server configured (set QS_REMOTE)")
+
+    script = os.environ.get("QS_SERVER_SCRIPT", "~/palette/server-app.sh")
+    timeout = 90 if action in ("start", "restart") else 45
+    try:
+        proc = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+             target, f"bash {script} {action}"],
+            capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        raise HTTPException(500, "ssh is not available on this machine") from None
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, f"'{action}' timed out talking to {target}") from None
+
+    # server-app.sh prints JSON on stdout and human notes on stderr, so a
+    # chatty start still parses.
+    note = (proc.stderr or "").strip()
+    try:
+        state = json.loads(proc.stdout)
+    except (json.JSONDecodeError, ValueError):
+        detail = note or (proc.stdout or "").strip() or "no output"
+        raise HTTPException(502, f"{target}: {detail[:300]}") from None
+
+    state["action"] = action
+    state["host"] = target
+    if note:
+        state["note"] = note.splitlines()[-1]
+    return state
+
+
+@app.get("/api/qs/server")
+def qs_server_status():
+    return _run_server_action("status")
+
+
+@app.post("/api/qs/server")
+def qs_server_control(body: dict = Body(...)):
+    return _run_server_action((body.get("action") or "").strip().lower())
+
+
 @app.post("/api/qs/discard")
 def qs_discard(body: dict = Body(...)):
     """Delete a clip whose caller has taken ownership of it.

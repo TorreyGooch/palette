@@ -3,7 +3,14 @@ const Quotes = {
   palettes: [],
   status: null,
 
+  server: null,
+  serverBusy: false,
+
   async load() {
+    // Server state first: if the corpus API is down, every call below fails,
+    // and "the server is stopped" is a far more useful thing to show than a
+    // connection error.
+    this.refreshServer();
     try {
       this.status = await api('/api/qs/status');
       this.palettes = await api('/api/palettes');
@@ -14,6 +21,88 @@ const Quotes = {
     }
     this.renderStatus();
     this.renderSourceFilter();
+  },
+
+  async refreshServer() {
+    if (this.serverBusy) return;
+    try {
+      this.server = await api('/api/qs/server');
+    } catch (e) {
+      this.server = { running: false, unreachable: true, error: e.message };
+    }
+    this.renderServer();
+  },
+
+  async serverAction(action) {
+    if (this.serverBusy) return;
+    if (action === 'stop' && !confirm('Stop the corpus server? Search and pulls will stop working until you start it again.')) return;
+
+    this.serverBusy = true;
+    this.setServerDot('busy', `${action}ing…`);
+    try {
+      this.server = await api('/api/qs/server', {
+        method: 'POST', body: JSON.stringify({ action }),
+      });
+      toast(this.server.note || `server ${action} ok`);
+    } catch (e) {
+      this.server = { running: false, unreachable: true, error: e.message };
+      toast(`server ${action} failed: ${e.message}`, 'error');
+    } finally {
+      this.serverBusy = false;
+      this.renderServer();
+    }
+    // Corpus totals are unknown until it is up, so reload them once it is.
+    if (this.server && this.server.running) {
+      try {
+        this.status = await api('/api/qs/status');
+        this.renderStatus();
+        this.renderSourceFilter();
+      } catch (e) { /* status line already says what it can */ }
+    }
+  },
+
+  setServerDot(kind, text) {
+    const dot = document.getElementById('q-server-dot');
+    if (dot) dot.className = `server-dot server-dot--${kind}`;
+    const state = document.getElementById('q-server-state');
+    if (state) state.textContent = text;
+  },
+
+  renderServer() {
+    const s = this.server || {};
+    const meters = document.getElementById('q-server-meters');
+    const [start, restart, stop] = ['q-server-start', 'q-server-restart', 'q-server-stop']
+      .map(id => document.getElementById(id));
+    if (!meters || !start) return;
+
+    if (s.unreachable) {
+      this.setServerDot('unknown', s.error || 'cannot reach the server machine');
+      meters.textContent = '';
+      start.disabled = restart.disabled = stop.disabled = true;
+      return;
+    }
+
+    if (s.running) {
+      this.setServerDot('up', `running on :${s.port}${s.uptime ? ' · up ' + s.uptime : ''}`);
+      // What it is costing, so the decision to stop it is an informed one.
+      const gpuPct = s.gpu_total_mb
+        ? ` (${Math.round(100 * s.gpu_used_mb / s.gpu_total_mb)}%)` : '';
+      meters.innerHTML =
+        `<span>build ${esc(s.version || '?')}</span>` +
+        `<span>app RAM ${s.rss_mb} MB</span>` +
+        `<span>machine free ${(s.mem_available_mb / 1024).toFixed(1)} GB</span>` +
+        `<span>VRAM ${s.gpu_used_mb}/${s.gpu_total_mb} MB${gpuPct}</span>` +
+        `<span>GPU ${s.gpu_util}%</span>`;
+    } else {
+      this.setServerDot('down', 'stopped — search and pulls are unavailable');
+      meters.innerHTML = s.gpu_total_mb
+        ? `<span>machine free ${(s.mem_available_mb / 1024).toFixed(1)} GB</span>` +
+          `<span>VRAM ${s.gpu_used_mb}/${s.gpu_total_mb} MB</span>`
+        : '';
+    }
+    start.disabled = !!s.running;
+    restart.disabled = false;
+    stop.disabled = !s.running;
   },
 
   renderStatus() {

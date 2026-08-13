@@ -329,6 +329,21 @@
       </div>
       <div class="page-body">
 
+        <!-- The corpus API is started on demand so it does not sit holding
+             memory and GPU that generation work needs. -->
+        <div class="section-card" id="q-server-card">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span id="q-server-dot" class="server-dot server-dot--unknown"></span>
+            <strong style="font-size:13px">Corpus server</strong>
+            <span id="q-server-state" style="font-size:12px;color:var(--muted)">checking…</span>
+            <span style="flex:1"></span>
+            <button id="q-server-start" onclick="Quotes.serverAction('start')">Start</button>
+            <button id="q-server-restart" onclick="Quotes.serverAction('restart')">Restart</button>
+            <button id="q-server-stop" class="danger" onclick="Quotes.serverAction('stop')">Stop</button>
+          </div>
+          <div id="q-server-meters" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+        </div>
+
         <div class="section-card">
           <div style="display:flex;gap:8px;margin-bottom:10px">
             <input type="text" id="q-query" placeholder='Search the spoken-word corpus… (Enter to search)' style="flex:1">
