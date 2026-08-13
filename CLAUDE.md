@@ -2,18 +2,89 @@
 
 Two things live in this repo:
 
-1. **palette** — local web app (`python run.py`, http://127.0.0.1:7861) for a
-   visual reference library: import images/video, carve clips (keyframe
-   workflow), tag items, group them into *palettes* (named collections,
-   many-to-many), export contact sheets / trimmed videos for diffusion
-   workflows. Data lives in a user-chosen library folder (`config.json` →
-   `library_path`); `library.json` inside it is the whole database.
-2. **quotesource (`qs`)** — headless spoken-word sourcing layer. Maintains a
-   corpus of YouTube channels / RSS podcasts with timestamped transcripts,
-   exposes search primitives, and stages verified segments onto palettes with
-   attribution. CLI: `qs.bat …` from repo root (or `python -m quotesource …`).
+1. **palette** — web app (`launch.bat`, http://127.0.0.1:7861) for a visual
+   reference library: import images/video, carve clips (keyframe workflow),
+   tag items, group them into *palettes* (named collections, many-to-many),
+   export contact sheets / trimmed videos for diffusion workflows. Data lives
+   in a user-chosen library folder (`config.json` → `library_path`);
+   `library.json` inside it is the whole database.
+2. **quotesource (`qs`)** — spoken-word sourcing layer. Maintains a corpus of
+   YouTube channels / RSS podcasts with timestamped transcripts, exposes
+   search primitives, and stages verified segments onto palettes with
+   attribution.
+
+## Read this first: it runs on two machines
+
+**The corpus is not on this machine.** It lives on the GPU server with the
+transcripts, the embeddings and whisper; the media library lives here, where
+video can actually be scrubbed. They are joined over the tailnet, and only
+small things cross: a search query is ~1 KB, a cut clip a few hundred KB.
+
+| | desktop (here) | server (`100.102.79.115`) |
+|---|---|---|
+| media library, palettes, exports | **yes** | no |
+| corpus, index, embeddings | no | **yes** (~1.9 GB) |
+| whisper, embedding, ComfyUI | no | **yes** (RTX 3060) |
+| the app you look at | `:7861` | `:7862`, API only |
+
+Consequences worth internalising before you start:
+
+- **`qs` on this machine cannot see the corpus.** The CLI reads it off disk
+  and cannot proxy, so `qs search` here exits 1 telling you where it went.
+  Use the app's endpoints (below), or run `qs` over ssh on the server.
+- **The server is started on demand.** It is not a service — that box shares
+  memory and GPU with generation. If search returns 503, the server is simply
+  off; start it (below) rather than debugging.
+- **Do not browse `:7862`.** It serves an explanation page, not the app.
+  Anything staged there lands in the *server's* library, not yours.
+
+## Starting a creative session
+
+```bash
+# 1. is the corpus server up?  (start|stop|restart|status)
+curl -s -X POST http://127.0.0.1:7861/api/qs/server \
+     -H 'Content-Type: application/json' -d '{"action":"start"}'
+```
+
+Or press **Start** on the Quotes page — same endpoint. The card shows what
+it costs: app RAM, free machine memory, VRAM, GPU load.
+
+**What it actually costs**, because the two figures are far apart: **~63 MB
+idle**, but **~3.3 GB after a search** — the embedding model plus one pass
+over the vectors. That is released about 10 minutes after the last search
+(`QS_MODEL_IDLE_S`), so an idle server is cheap and a busy one is not. Stop
+it outright before a long generation run if you want the memory back now.
+
+```bash
+# 2. confirm the corpus answers and see how much of it is embedded
+curl -s 'http://127.0.0.1:7861/api/qs/status' | jq '.totals, .embeddings'
+
+# 3. search, read context, cut - all through the local app, which forwards
+curl -s 'http://127.0.0.1:7861/api/qs/search?q=<phrase>&limit=5'
+```
+
+Everything under `/api/qs/*` on **:7861** works whether the corpus is local
+or remote; that is the whole point of the bridge. Prefer it to the CLI.
+
+**What is in the corpus right now:** ~1,639 episodes — Jordan Peterson
+(1,079) and Lex Fridman (560, full episodes only; clip re-uploads are
+filtered out by `min_duration`). 385k chunks, 100% embedded with
+`bge-large-en-v1.5`. Lex's transcripts are human-made and punctuated;
+Peterson's are mostly YouTube auto-captions, so expect missing punctuation
+and the occasional mis-hearing there.
 
 ## qs commands (all emit JSON; `--pretty` for humans)
+
+**These run on the server**, over ssh or in a shell there:
+
+```bash
+ssh torrey@100.102.79.115
+cd ~/palette && source ~/.palette-env && ./qs <command>
+```
+
+`source ~/.palette-env` is not optional: it carries `QS_EMBED_MODEL` and
+`LD_LIBRARY_PATH`. Without it, search refuses (model mismatch) rather than
+returning nonsense, and whisper silently drops to CPU.
 
 | command | purpose |
 |---|---|
@@ -40,8 +111,14 @@ Hit shape: `{episode_id, source_id, start, end, text, score, episode_title,
 upload_date, url, url_ts}`. `qs search` JSON wraps hits with `coverage`
 (fraction of chunks embedded — treat <1.0 as "results may be incomplete").
 
-Errors: `{"error": msg}` on stderr, exit 1 (2 for usage). Web UI mirror of
-search/context/pull lives on the Quotes page (`/api/qs/*` endpoints).
+Errors: `{"error": msg}` on stderr, exit 1 (2 for usage).
+
+**The `/api/qs/*` endpoints on :7861 are the primary interface, not a
+mirror.** They cover `status`, `search`, `context`, `pull`, `cut`, `warm`,
+`discard` and `server`, work identically whether the corpus is local or
+remote, and — unlike the CLI — put the resulting clip in *this* machine's
+library. Reach for the CLI only for corpus maintenance (`ingest`, `index`,
+`embed`, `transcribe`) and for `words`, which has no endpoint yet.
 
 ## Investigation patterns
 
@@ -86,15 +163,38 @@ passing it to `ingest` overrides for one run. Accepts `1800`, `30m`,
   `quotesource` + person, type `audio` or `video`.
 - `qs cut` is the one to use when a quote becomes narration. See
   "Cutting quotes for narration" below — it has the full workflow.
-- Most transcripts are YouTube auto-captions until the whisper backfill
-  (Phase 2) runs: expect missing punctuation and occasional mis-hearings;
-  verify anything you plan to present as a quote.
+- Transcript quality is per-source, not uniform: Lex's are human-made and
+  punctuated, Peterson's are mostly YouTube auto-captions with missing
+  punctuation and occasional mis-hearings. 34 episodes have no captions at
+  all and are queued as `needs_transcription`. Verify wording via
+  `context` before presenting anything as a quote.
 - After any `qs ingest`, run `qs index` then `qs embed` (both incremental).
+- **Clip filenames truncate their bounds to whole seconds**, so two cuts a
+  fraction of a second apart collide on one name and several library items
+  can share a file. Deleting an item only removes the media when it was the
+  last reference. Don't assume filename identifies an item.
+- Search is ~2 s warm and grows with the corpus, since it is brute-force
+  cosine over every vector. `--source` cuts the work roughly in proportion.
+  The first search after a start also loads the model (~2 s extra), which is
+  then released after 10 minutes idle.
+
+**Things that will waste your time if you don't know them**
+- A `503` from search means the corpus server is stopped, not broken.
+- `qs` run on the desktop exits 1 and tells you the corpus is elsewhere.
+  That is the guard working, not a misconfiguration.
+- `/api/qs/status` reports `palette.version` and `palette.capabilities` for
+  both ends (`remote_palette` when bridged). If something documented here
+  is missing, check the two sides are on the same build — `.\deploy.ps1
+  -Check` answers that in one command.
+- `tail_clean: false` in a cut's diagnostics means no natural pause was
+  within reach and the tail was faded. Usable, but moving the end to just
+  before a real pause is better — that is what step 2 is for.
 
 ## Cutting quotes for narration
 
-Use `small` or better — `base` mis-hears (it produced "black dog" for
-"black dot"). Set it once: `QS_WHISPER_MODEL=small`.
+On the server whisper runs on the GPU and picks `large-v3` by itself. On a
+CPU-only machine set `QS_WHISPER_MODEL=small` or better — `base` mis-hears
+(it produced "black dog" for "black dot").
 
 **The workflow, in order. Step 2 is the one that is easy to skip and
 should not be.**
@@ -114,6 +214,32 @@ qs words PWasTAtR6Ns --range 477 490 --pretty
 qs cut PWasTAtR6Ns --range 477.45 487.15 \
     --palette "Narration" --person "Jordan Peterson" --pretty
 ```
+
+**From the desktop, the same three steps over the app** — and this is the
+form to prefer, because the clip lands in *your* library rather than the
+server's:
+
+```bash
+API=http://127.0.0.1:7861/api/qs
+curl -s "$API/search?q=a+defeated+lobster+given+antidepressants&limit=5"
+curl -s "$API/context?episode_id=PWasTAtR6Ns&start=477&end=490&window=10"
+
+# cut is a job: POST returns a job_id, then poll until done
+curl -s -X POST "$API/cut" -H 'Content-Type: application/json' -d '{
+  "episode_id":"PWasTAtR6Ns","start":477.45,"end":487.15,
+  "palette":"Narration","person":"Jordan Peterson"}'
+curl -s "$API/pull/<job_id>"        # same polling endpoint for pull and cut
+```
+
+There is no `words` endpoint yet, so for step 2 either ssh over and run
+`qs words`, or accept that a boundary guessed from caption timestamps
+usually needs a second attempt.
+
+**What the job does:** the server cuts the clip, your machine downloads it
+with its `.words.json` manifest, registers it locally with attribution and
+palette, then tells the server to discard its copy. Poll `stage` to follow
+along; `item` holds the finished library entry. A 410 while polling means
+the server restarted and the job is gone — start it again.
 
 Why step 2 matters: `qs cut` ends where you tell it. It will extend only
 `QS_CUT_EXTEND_MS` (300 ms) looking for a pause, then stop and fade. Pick
