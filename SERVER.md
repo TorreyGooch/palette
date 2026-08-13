@@ -246,6 +246,45 @@ ComfyUI and any video model are separate processes — they use the GPU
 already and share it with these jobs, so avoid running a whisper batch
 during a long generation.
 
+## Split setup: corpus on the server, media on your desktop
+
+Putting everything on the server is the simplest story, but it breaks down
+if you review video from another machine: scrubbing needs sustained MB/s,
+and a Tailscale connection that falls back to a DERP relay gives you about
+1 MB/s. Check which you have — a relayed link makes remote video painful:
+
+```bash
+tailscale ping <peer>        # "via DERP(...)" = relayed, "direct" = fast
+```
+
+The split that works: **the corpus stays with the GPU, the media stays with
+your eyes.** A search query is ~1 KB and a cut clip is a few hundred KB, so
+only tiny things cross the network — never the multi-GB corpus, never the
+media library.
+
+Run palette in both places. On the server, as the corpus API:
+
+```bash
+source ~/.palette-env
+PALETTE_HOST=tailscale python run.py     # library folder can stay empty
+```
+
+On your desktop, point at it:
+
+```powershell
+$env:QS_REMOTE="http://100.102.79.115:7861"; python run.py
+```
+
+With `QS_REMOTE` set, `/api/qs/*` forwards to the server instead of loading
+quotesource locally. Search, context and status become proxied JSON. `pull`
+and `cut` run on the server — where the corpus, the audio cache and the GPU
+whisper all are — and the finished clip (plus its `.words.json` manifest) is
+downloaded into your local library with its attribution, tags and palettes
+intact. The browser polls the same endpoints and cannot tell the difference.
+
+The desktop then needs no corpus at all. Delete any stale local
+`<library>/quotesource/` so there is no question which copy is real.
+
 ### One less hop
 
 If the GPU box is also the machine running the video model, put the

@@ -1,0 +1,172 @@
+"""Talk to a quotesource corpus living on another machine.
+
+The corpus (transcripts + index + vectors, several GB and growing) belongs
+next to the GPU that builds it. The media library belongs next to the person
+scrubbing video. Those pull in opposite directions, so palette runs in two
+places: a headless instance on the server owning the corpus, and the one you
+actually look at, owning the media.
+
+Set QS_REMOTE to the server's palette URL and the /api/qs/* endpoints stop
+importing quotesource locally and forward there instead. What crosses the
+network is a text query and, for cut/pull, one small clip — never the corpus
+and never the media library.
+
+Deliberately stdlib-only and blocking: the qs endpoints are already sync on
+purpose (FastAPI runs them in a threadpool), so there is no async client to
+justify and no dependency to add.
+"""
+import json
+import os
+import shutil
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Optional
+
+# Long enough for a cold semantic search (model load + brute-force cosine),
+# short enough to fail rather than hang the UI. Job polling uses its own.
+TIMEOUT = float(os.environ.get("QS_REMOTE_TIMEOUT", "120"))
+
+
+def remote_base() -> Optional[str]:
+    """The remote palette's base URL, or None when running self-contained."""
+    base = (os.environ.get("QS_REMOTE") or "").strip().rstrip("/")
+    if not base:
+        return None
+    if not base.startswith(("http://", "https://")):
+        base = "http://" + base
+    return base
+
+
+class RemoteError(RuntimeError):
+    """A remote call failed. Carries the upstream status when there was one."""
+
+    def __init__(self, message: str, status: int = 502):
+        super().__init__(message)
+        self.status = status
+
+
+def _request(method: str, path: str, params: dict = None,
+             body: dict = None, timeout: float = None):
+    base = remote_base()
+    if not base:
+        raise RemoteError("QS_REMOTE is not set", 500)
+
+    url = f"{base}{path}"
+    if params:
+        clean = {k: v for k, v in params.items() if v is not None}
+        if clean:
+            url += "?" + urllib.parse.urlencode(clean)
+
+    data = None
+    headers = {"Accept": "application/json"}
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:400]
+        try:
+            detail = json.loads(detail).get("detail", detail)
+        except Exception:
+            pass
+        # Preserve the upstream status: a 404 for a missing episode should not
+        # reach the browser as a generic gateway error.
+        raise RemoteError(f"remote {e.code}: {detail}", e.code) from None
+    except urllib.error.URLError as e:
+        raise RemoteError(f"cannot reach quotesource at {base}: {e.reason}", 503) from None
+
+    return json.loads(raw) if raw else None
+
+
+def get(path: str, params: dict = None, timeout: float = None):
+    return _request("GET", path, params=params, timeout=timeout)
+
+
+def post(path: str, body: dict, timeout: float = None):
+    return _request("POST", path, body=body, timeout=timeout)
+
+
+def fetch_file(filename: str, dest: Path, timeout: float = 600.0) -> bool:
+    """Download one file from the remote library's media folder.
+
+    Returns False when the remote has no such file, which is not always an
+    error — `qs cut` writes a .words.json sidecar that a plain pull will not.
+    """
+    base = remote_base()
+    url = f"{base}/api/media/{urllib.parse.quote(filename)}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_suffix(dest.suffix + ".part")
+            with open(tmp, "wb") as fh:
+                shutil.copyfileobj(resp, fh)
+            tmp.replace(dest)  # atomic: never leave a half file in the library
+        return True
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        raise RemoteError(f"downloading {filename}: remote {e.code}", e.code) from None
+    except urllib.error.URLError as e:
+        raise RemoteError(f"downloading {filename}: {e.reason}", 503) from None
+
+
+def poll_job(job_id: str, kind: str = "pull", interval: float = 1.0,
+             max_wait: float = 1800.0) -> dict:
+    """Block until a remote pull/cut job finishes. Returns the finished job."""
+    import time
+
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        job = get(f"/api/qs/{kind}/{job_id}", timeout=30)
+        if job.get("done"):
+            return job
+        time.sleep(interval)
+    raise RemoteError(f"remote {kind} job {job_id} did not finish in {max_wait:.0f}s", 504)
+
+
+async def adopt_remote_item(root: Path, remote_item: dict) -> dict:
+    """Copy a clip the remote just produced into the local library.
+
+    The remote staged it into *its* library; we want it in ours, with a local
+    thumbnail and id but the same attribution, tags and palettes — those are
+    the parts that make the clip citable, and regenerating them here would
+    risk them drifting from what the server recorded.
+    """
+    from .library import load_library, register_media_file, save_library
+
+    filename = remote_item.get("filename")
+    if not filename:
+        raise RemoteError("remote job returned no filename", 502)
+
+    dest = root / "media" / filename
+    if not dest.exists():
+        if not fetch_file(filename, dest):
+            raise RemoteError(f"remote produced {filename} but will not serve it", 502)
+
+    # qs cut writes per-word timings beside the audio; without them the clip
+    # cannot drive visual beats, so it is part of the artifact, not extra.
+    sidecar = f"{filename}.words.json"
+    fetch_file(sidecar, root / "media" / sidecar)
+
+    item = await register_media_file(
+        root, filename, remote_item.get("title") or filename,
+        remote_item.get("url"))
+
+    carried = {k: remote_item[k] for k in
+               ("tags", "palettes", "attribution", "url", "title")
+               if remote_item.get(k)}
+    if carried:
+        lib = load_library(root)
+        for existing in lib["items"]:
+            if existing["id"] == item["id"]:
+                existing.update(carried)
+                item = existing
+                break
+        save_library(root, lib)
+    return item

@@ -382,9 +382,36 @@ async def export_video_ep(body: dict = Body(...)):
 # ── Quotesource bridge ────────────────────────────────────────────────────────
 # Sync endpoints on purpose: FastAPI runs them in a threadpool, and the
 # quotesource library is synchronous (sqlite + subprocess via asyncio.run).
+#
+# When QS_REMOTE is set the corpus lives on another machine (see qs_remote):
+# these forward there instead of importing quotesource locally, so the media
+# library can stay on the machine you review video on.
+
+def _remote():
+    from .qs_remote import remote_base
+
+    return remote_base()
+
+
+def _remote_call(fn):
+    """Run a remote call, mapping transport failures onto HTTP responses."""
+    from .qs_remote import RemoteError
+
+    try:
+        return fn()
+    except RemoteError as e:
+        raise HTTPException(e.status, str(e)) from None
+
 
 @app.get("/api/qs/status")
 def qs_status():
+    if _remote():
+        from . import qs_remote
+
+        status = _remote_call(lambda: qs_remote.get("/api/qs/status"))
+        status["remote"] = _remote()
+        return status
+
     from quotesource.status import corpus_status
 
     try:
@@ -397,6 +424,13 @@ def qs_status():
 def qs_search(q: str, mode: str = "semantic", source: Optional[str] = None,
               person: Optional[str] = None, after: Optional[str] = None,
               before: Optional[str] = None, limit: int = 20):
+    if _remote():
+        from . import qs_remote
+
+        return _remote_call(lambda: qs_remote.get("/api/qs/search", {
+            "q": q, "mode": mode, "source": source, "person": person,
+            "after": after, "before": before, "limit": limit}))
+
     try:
         if mode == "grep":
             from quotesource.search import grep
@@ -420,6 +454,13 @@ def qs_search(q: str, mode: str = "semantic", source: Optional[str] = None,
 
 @app.get("/api/qs/context")
 def qs_context(episode_id: str, start: float, end: float, window: float = 20.0):
+    if _remote():
+        from . import qs_remote
+
+        return _remote_call(lambda: qs_remote.get("/api/qs/context", {
+            "episode_id": episode_id, "start": start,
+            "end": end, "window": window}))
+
     from quotesource.search import context
 
     try:
@@ -432,8 +473,69 @@ def qs_context(episode_id: str, start: float, end: float, window: float = 20.0):
 _pull_jobs: dict = {}
 
 
+def _start_remote_job(kind: str, body: dict):
+    """Mirror a remote pull/cut as a local job.
+
+    The remote does the work and stages the clip into its own library; we
+    follow its progress, then copy the result into ours. The browser polls
+    the same endpoints either way and cannot tell the difference.
+    """
+    import threading
+    import uuid as _uuid
+    from datetime import datetime as _dt
+
+    from . import qs_remote
+
+    job_id = str(_uuid.uuid4())[:8]
+    job = {"stage": "queued", "started": _dt.now().isoformat(),
+           "done": False, "error": None, "item": None, "remote": True}
+    _pull_jobs[job_id] = job
+
+    def _run_job():
+        import asyncio as _asyncio
+
+        try:
+            started = qs_remote.post(f"/api/qs/{kind}", body)
+            remote_id = started["job_id"]
+            job["stage"] = "remote:queued"
+
+            def _mirror(j):
+                job["stage"] = f"remote:{j.get('stage', '?')}"
+
+            import time
+            deadline = time.time() + 1800
+            finished = None
+            while time.time() < deadline:
+                j = qs_remote.get(f"/api/qs/pull/{remote_id}", timeout=30)
+                _mirror(j)
+                if j.get("done"):
+                    finished = j
+                    break
+                time.sleep(1.0)
+            if finished is None:
+                raise qs_remote.RemoteError(f"remote {kind} did not finish", 504)
+            if finished.get("error"):
+                raise RuntimeError(finished["error"])
+
+            job["stage"] = "downloading"
+            job["item"] = _asyncio.run(
+                qs_remote.adopt_remote_item(_root(), finished["item"]))
+            job["stage"] = "done"
+        except Exception as e:
+            job["error"] = str(e)
+            job["stage"] = "failed"
+        finally:
+            job["done"] = True
+
+    threading.Thread(target=_run_job, daemon=True).start()
+    return {"job_id": job_id}
+
+
 @app.post("/api/qs/pull")
 def qs_pull(body: dict = Body(...)):
+    if _remote():
+        return _start_remote_job("pull", body)
+
     import threading
     import uuid as _uuid
     from datetime import datetime as _dt
@@ -479,6 +581,9 @@ def qs_pull_status(job_id: str):
 @app.post("/api/qs/cut")
 def qs_cut(body: dict = Body(...)):
     """Word-accurate cut. Same job/polling contract as /api/qs/pull."""
+    if _remote():
+        return _start_remote_job("cut", body)
+
     import threading
     import uuid as _uuid
     from datetime import datetime as _dt
@@ -519,6 +624,16 @@ _warming: set = set()
 def qs_warm(body: dict = Body(...)):
     """Start caching an episode's media in the background so a subsequent
     pull is near-instant. Fire-and-forget; safe to call repeatedly."""
+    if _remote():
+        # The cache that matters is the remote's - that is where the media is
+        # fetched and cut. Best effort by design: warming is an optimisation.
+        from . import qs_remote
+
+        try:
+            return qs_remote.post("/api/qs/warm", body, timeout=30)
+        except qs_remote.RemoteError as e:
+            return {"status": "unavailable", "detail": str(e)}
+
     import asyncio as _asyncio
     import threading
 
