@@ -1,6 +1,9 @@
 import json
 import os
 import shutil
+import threading
+import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -21,6 +24,35 @@ from .api.media import (
 )
 
 TOOL_DIR = Path(__file__).parent.parent
+
+# What this build can do, advertised on /api/qs/status so a client can tell
+# whether a feature is safe to rely on. A bare commit says the two sides
+# differ; it does not say whether the difference matters. An older server
+# simply advertises fewer of these, so support degrades instead of failing
+# silently — which is exactly how the staging flag went unnoticed.
+API_VERSION = 2
+CAPABILITIES = [
+    "stage",       # pull/cut honour stage=False instead of always staging
+    "discard",     # /api/qs/discard removes a handed-over clip
+    "api_only",    # PALETTE_API_ONLY serves an explanation instead of the UI
+    "job_boot_id",  # job ids identify the process, so a restart is legible
+]
+
+
+def _build_version() -> str:
+    """Short commit of the running tree, for humans reading a status page."""
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             cwd=str(TOOL_DIR), capture_output=True,
+                             text=True, timeout=5)
+        return out.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+BUILD_VERSION = _build_version()
 
 app = FastAPI(title="PALETTE")
 app.mount(
@@ -444,6 +476,11 @@ def _remote_call(fn):
         raise HTTPException(e.status, str(e)) from None
 
 
+def _palette_block() -> dict:
+    return {"version": BUILD_VERSION, "api": API_VERSION,
+            "capabilities": CAPABILITIES, "boot_id": BOOT_ID}
+
+
 @app.get("/api/qs/status")
 def qs_status():
     if _remote():
@@ -451,12 +488,18 @@ def qs_status():
 
         status = _remote_call(lambda: qs_remote.get("/api/qs/status"))
         status["remote"] = _remote()
+        # The forwarded body carries the remote's own palette block; keep it
+        # under a separate key so both sides are visible at once.
+        status["remote_palette"] = status.get("palette")
+        status["palette"] = _palette_block()
         return status
 
     from quotesource.status import corpus_status
 
     try:
-        return corpus_status()
+        status = corpus_status()
+        status["palette"] = _palette_block()
+        return status
     except Exception as e:
         raise HTTPException(409, str(e))
 
@@ -512,6 +555,52 @@ def qs_context(episode_id: str, start: float, end: float, window: float = 20.0):
 
 # Pull runs as a job: POST starts it, GET polls stage/elapsed/result.
 _pull_jobs: dict = {}
+_jobs_lock = threading.Lock()
+
+# Jobs live in memory, so a restart loses them. Ids carry the id of the
+# process that made them, which lets a client polling across a restart be
+# told what actually happened instead of getting a bare "unknown job".
+BOOT_ID = uuid.uuid4().hex[:8]
+
+JOB_TTL_S = float(os.environ.get("PALETTE_JOB_TTL_S", "3600"))
+JOB_MAX = int(os.environ.get("PALETTE_JOB_MAX", "200"))
+
+
+def _prune_jobs():
+    """Forget finished jobs. Running ones are never dropped.
+
+    A CLI process exited and took its jobs with it; a server running for
+    weeks accumulates one dict entry per pull forever.
+    """
+    now = time.time()
+    finished = [(jid, j) for jid, j in _pull_jobs.items() if j.get("done")]
+    for jid, job in finished:
+        if now - job.get("finished_at", now) > JOB_TTL_S:
+            _pull_jobs.pop(jid, None)
+
+    over = len(_pull_jobs) - JOB_MAX
+    if over > 0:
+        oldest = sorted((kv for kv in _pull_jobs.items() if kv[1].get("done")),
+                        key=lambda kv: kv[1].get("finished_at", 0.0))
+        for jid, _ in oldest[:over]:
+            _pull_jobs.pop(jid, None)
+
+
+def _new_job(**extra) -> tuple:
+    """Register a job and return (job_id, job)."""
+    job_id = f"{BOOT_ID}-{uuid.uuid4().hex[:8]}"
+    job = {"stage": "queued", "started": datetime.now().isoformat(),
+           "done": False, "error": None, "item": None}
+    job.update(extra)
+    with _jobs_lock:
+        _prune_jobs()
+        _pull_jobs[job_id] = job
+    return job_id, job
+
+
+def _finish_job(job: dict):
+    job["done"] = True
+    job["finished_at"] = time.time()
 
 
 def _start_remote_job(kind: str, body: dict):
@@ -521,16 +610,9 @@ def _start_remote_job(kind: str, body: dict):
     follow its progress, then copy the result into ours. The browser polls
     the same endpoints either way and cannot tell the difference.
     """
-    import threading
-    import uuid as _uuid
-    from datetime import datetime as _dt
-
     from . import qs_remote
 
-    job_id = str(_uuid.uuid4())[:8]
-    job = {"stage": "queued", "started": _dt.now().isoformat(),
-           "done": False, "error": None, "item": None, "remote": True}
-    _pull_jobs[job_id] = job
+    job_id, job = _new_job(remote=True)
 
     def _run_job():
         import asyncio as _asyncio
@@ -539,6 +621,13 @@ def _start_remote_job(kind: str, body: dict):
             # The remote produces the clip; this library owns it. Staging it
             # there too would leave a second copy on a machine that never
             # opens it, on a disk shared with model checkpoints.
+            #
+            # An older server does not know the flag, ignores it, and stages
+            # anyway — silently, which is the failure mode worth naming.
+            if not qs_remote.remote_supports("stage"):
+                job["warning"] = (
+                    "remote is too old to skip staging; it will keep its own "
+                    "copy of this clip")
             started = qs_remote.post(f"/api/qs/{kind}", {**body, "stage": False})
             remote_id = started["job_id"]
             job["stage"] = "remote:queued"
@@ -546,7 +635,6 @@ def _start_remote_job(kind: str, body: dict):
             def _mirror(j):
                 job["stage"] = f"remote:{j.get('stage', '?')}"
 
-            import time
             deadline = time.time() + 1800
             finished = None
             while time.time() < deadline:
@@ -584,7 +672,7 @@ def _start_remote_job(kind: str, body: dict):
             job["error"] = str(e)
             job["stage"] = "failed"
         finally:
-            job["done"] = True
+            _finish_job(job)
 
     threading.Thread(target=_run_job, daemon=True).start()
     return {"job_id": job_id}
@@ -595,16 +683,9 @@ def qs_pull(body: dict = Body(...)):
     if _remote():
         return _start_remote_job("pull", body)
 
-    import threading
-    import uuid as _uuid
-    from datetime import datetime as _dt
-
     from quotesource.pull import pull
 
-    job_id = str(_uuid.uuid4())[:8]
-    job = {"stage": "queued", "started": _dt.now().isoformat(),
-           "done": False, "error": None, "item": None}
-    _pull_jobs[job_id] = job
+    job_id, job = _new_job()
 
     def _run_job():
         try:
@@ -624,7 +705,7 @@ def qs_pull(body: dict = Body(...)):
             job["error"] = str(e)
             job["stage"] = "failed"
         finally:
-            job["done"] = True
+            _finish_job(job)
 
     threading.Thread(target=_run_job, daemon=True).start()
     return {"job_id": job_id}
@@ -670,9 +751,15 @@ def qs_discard(body: dict = Body(...)):
 @app.get("/api/qs/pull/{job_id}")
 def qs_pull_status(job_id: str):
     job = _pull_jobs.get(job_id)
-    if not job:
-        raise HTTPException(404, "unknown job")
-    return job
+    if job:
+        return job
+    # An id stamped by an earlier process means the server restarted, which
+    # is a different story from a bad id and worth telling apart: the work
+    # is gone and will not come back, so the caller should stop polling.
+    if "-" in job_id and not job_id.startswith(f"{BOOT_ID}-"):
+        raise HTTPException(
+            410, "the server restarted after this job started; it is gone")
+    raise HTTPException(404, "unknown job")
 
 
 @app.post("/api/qs/cut")
@@ -681,16 +768,9 @@ def qs_cut(body: dict = Body(...)):
     if _remote():
         return _start_remote_job("cut", body)
 
-    import threading
-    import uuid as _uuid
-    from datetime import datetime as _dt
-
     from quotesource.cut import cut_quote
 
-    job_id = str(_uuid.uuid4())[:8]
-    job = {"stage": "queued", "started": _dt.now().isoformat(),
-           "done": False, "error": None, "item": None}
-    _pull_jobs[job_id] = job
+    job_id, job = _new_job()
 
     def _run_job():
         try:
@@ -709,7 +789,7 @@ def qs_cut(body: dict = Body(...)):
             job["error"] = str(e)
             job["stage"] = "failed"
         finally:
-            job["done"] = True
+            _finish_job(job)
 
     threading.Thread(target=_run_job, daemon=True).start()
     return {"job_id": job_id}

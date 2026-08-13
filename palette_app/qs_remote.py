@@ -18,6 +18,7 @@ justify and no dependency to add.
 import json
 import os
 import shutil
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -90,6 +91,43 @@ def get(path: str, params: dict = None, timeout: float = None):
 
 def post(path: str, body: dict, timeout: float = None):
     return _request("POST", path, body=body, timeout=timeout)
+
+
+# Capabilities change only when the far side restarts onto new code, so a
+# short cache keeps this off the path of every pull without going stale for
+# long. Deliberately fail-soft: an unreachable server reports no
+# capabilities, and callers treat that as "assume the old behaviour".
+_CAP_TTL_S = float(os.environ.get("QS_REMOTE_CAP_TTL_S", "60"))
+_caps: set = set()
+_caps_base = None
+_caps_at = 0.0
+
+
+def remote_capabilities(refresh: bool = False) -> set:
+    """What the remote says it can do. Empty when unknown or unreachable."""
+    global _caps, _caps_base, _caps_at
+
+    base = remote_base()
+    if not base:
+        return set()
+
+    now = time.monotonic()
+    if (not refresh and _caps_base == base
+            and now - _caps_at < _CAP_TTL_S):
+        return _caps
+
+    try:
+        status = get("/api/qs/status", timeout=30) or {}
+        palette = status.get("palette") or {}
+        _caps = set(palette.get("capabilities") or [])
+    except RemoteError:
+        _caps = set()
+    _caps_base, _caps_at = base, now
+    return _caps
+
+
+def remote_supports(name: str) -> bool:
+    return name in remote_capabilities()
 
 
 def fetch_file(filename: str, dest: Path, timeout: float = 600.0) -> bool:
