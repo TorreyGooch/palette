@@ -1,11 +1,12 @@
 import json
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Body
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import get_library_path, set_library_path
@@ -29,8 +30,29 @@ app.mount(
 )
 
 
+# An instance that exists only to serve a corpus should not also hand out a
+# UI: two palettes that look identical but hold different libraries is how
+# you end up tagging clips into the wrong one, or thinking a delete failed.
+API_ONLY = os.environ.get("PALETTE_API_ONLY", "").strip() not in ("", "0")
+
+API_ONLY_PAGE = """<!doctype html><meta charset="utf-8">
+<title>quotesource API</title>
+<style>body{font:16px/1.6 system-ui;margin:12vh auto;max-width:34rem;padding:0 1.5rem;
+background:#14161a;color:#e6e6e6}code{background:#232730;padding:.15em .4em;
+border-radius:4px}a{color:#79b8ff}</style>
+<h1>quotesource API</h1>
+<p>This is the corpus API, not your library. It has the transcripts and the
+GPU; it does <strong>not</strong> have your media.</p>
+<p>Anything you stage here lands in <em>this</em> machine's library, not yours.
+Open palette on your own machine instead — it queries this one over
+<code>QS_REMOTE</code> and keeps the clips locally.</p>
+<p><a href="/api/qs/status">/api/qs/status</a></p>"""
+
+
 @app.get("/")
 def serve_frontend():
+    if API_ONLY:
+        return HTMLResponse(API_ONLY_PAGE)
     return FileResponse(str(TOOL_DIR / "frontend" / "index.html"))
 
 
