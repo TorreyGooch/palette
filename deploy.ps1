@@ -17,7 +17,11 @@ param(
     [int]$LocalPort = 7861
 )
 
-$ErrorActionPreference = "Stop"
+# Deliberately not "Stop": git, ssh and scp all write ordinary progress to
+# stderr, and under Stop PowerShell 5.1 turns each such line into a
+# terminating error - aborting a deploy that is going fine. Every native
+# call below is followed by an explicit $LASTEXITCODE check instead.
+$ErrorActionPreference = "Continue"
 $repo = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $repo
 
