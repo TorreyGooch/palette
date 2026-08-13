@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Run the suite before anything leaves this machine.
+#
+# Two machines pull from this remote, so a bad push is a bad push twice over.
+# The suite takes about a second; there is no reason to skip it.
+#
+# Enable once per clone:  git config core.hooksPath hooks
+# Bypass in an emergency: git push --no-verify
+
+for candidate in \
+  "$LOCALAPPDATA/Python/pythoncore-3.14-64/python.exe" \
+  "$HOME/miniconda3/envs/palette/bin/python" \
+  python3 python
+do
+  if command -v "$candidate" >/dev/null 2>&1 || [ -x "$candidate" ]; then
+    PY="$candidate"
+    break
+  fi
+done
+
+if [ -z "${PY:-}" ]; then
+  echo "pre-push: no python found; skipping tests" >&2
+  exit 0
+fi
+
+if ! "$PY" -c "import pytest" >/dev/null 2>&1; then
+  echo "pre-push: pytest not installed; skipping tests" >&2
+  echo "          pip install -r requirements-dev.txt" >&2
+  exit 0
+fi
+
+echo "pre-push: running tests..."
+if ! "$PY" -m pytest --no-header -q; then
+  echo >&2
+  echo "pre-push: tests failed - push aborted." >&2
+  echo "          Fix them, or push with --no-verify if you truly mean to." >&2
+  exit 1
+fi
