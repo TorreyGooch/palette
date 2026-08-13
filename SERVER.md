@@ -170,13 +170,39 @@ its own and needs no flags.
 
 ```bash
 pip install faster-whisper fastembed-gpu
-pip install nvidia-cublas-cu12 nvidia-cudnn-cu12   # ctranslate2 CUDA deps
+# onnxruntime-gpu from plain PyPI is built against CUDA 13; ctranslate2 wants
+# CUDA 12. Take the CUDA 12 build so both stacks share one generation:
+pip uninstall -y onnxruntime onnxruntime-gpu
+pip install onnxruntime-gpu --extra-index-url \
+  https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 nvidia-cuda-runtime-cu12
 ```
 
-That last line is the usual stumbling block: ctranslate2 needs cuBLAS and
-cuDNN, and a missing `libcudnn` shows up as an import or runtime error
-rather than a clean "no GPU" message. Installing them from pip avoids
-depending on a system CUDA install.
+Then put the pip-installed NVIDIA libs on the loader path, or onnxruntime
+will not find `libcudnn` even though it is installed:
+
+```bash
+SITE=$(python -c 'import site; print(site.getsitepackages()[0])')
+export LD_LIBRARY_PATH="$(find "$SITE/nvidia" -maxdepth 2 -name lib -type d | tr '\n' ':')$LD_LIBRARY_PATH"
+```
+
+Keep that (and `QS_EMBED_MODEL`) in a `~/.palette-env` you source before
+running `qs`, so every invocation agrees.
+
+**This is the stumbling block, and it fails quietly.** `embedder.py` asks
+for `CUDAExecutionProvider` and falls back to CPU on failure, so a broken
+CUDA setup does not error — it just runs ~38x slower. On an RTX 3060,
+embedding runs at **~150 chunks/s**; CPU manages ~4/s. If `qs embed`
+reports an ETA in hours rather than minutes, you are on CPU. Confirm
+before starting a long job:
+
+```bash
+python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader
+```
+
+A real GPU embed run sits at ~100% utilisation and several GB of VRAM.
+Utilisation pinned at 0% means the fallback happened.
 
 What then runs on the GPU:
 
@@ -197,6 +223,24 @@ python -c "import ctranslate2; print('cuda devices:', ctranslate2.get_cuda_devic
 
 A non-zero device count means whisper is on the GPU. If embeddings were
 built with a different model, `qs embed --reset` re-embeds.
+
+### "Failed to initialize NVML: Driver/library version mismatch"
+
+The driver package was upgraded while the old kernel module was still
+loaded. Nothing needs installing — compare the two and reboot:
+
+```bash
+sed -n 's/^NVRM version:.*x86_64 *\([0-9.]*\).*/\1/p' /proc/driver/nvidia/version  # loaded
+dpkg -l | grep -E 'nvidia-driver-[0-9]'                                            # installed
+```
+
+### Choosing an embedding model
+
+`QS_EMBED_MODEL` (default `BAAI/bge-small-en-v1.5`). On a GPU the larger
+models cost minutes rather than hours, so `BAAI/bge-large-en-v1.5`
+(1024-dim) is worth it for retrieval quality. **Never mix models in one
+vector store** — similarity scores across different models are
+meaningless. Changing it means `qs embed --reset`.
 
 ComfyUI and any video model are separate processes — they use the GPU
 already and share it with these jobs, so avoid running a whisper batch

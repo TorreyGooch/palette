@@ -18,7 +18,7 @@ Two things live in this repo:
 | command | purpose |
 |---|---|
 | `qs sources list\|add\|remove` | registry (`sources.yaml` at the data root, hand-editable) |
-| `qs ingest <source-id> [--limit N]` / `--all` | fetch episode metadata + captions; idempotent, throttled, resumable |
+| `qs ingest <source-id> [--limit N] [--min-duration 30m]` / `--all` | fetch episode metadata + captions; idempotent, throttled, resumable |
 | `qs episodes <source-id>` | per-episode transcript status |
 | `qs status` | corpus totals, index size, embedding coverage, disk |
 | `qs index [--rebuild]` | chunk + FTS index; incremental (transcript-hash keyed) |
@@ -59,6 +59,14 @@ search/context/pull lives on the Quotes page (`/api/qs/*` endpoints).
 quotes for FTS5 phrase match). If it misses (caption wording drift), fall
 back to `qs search` with the phrase — then verify wording via `qs context`
 before quoting anywhere.
+
+**Filtering out clip re-uploads.** Channels that post excerpts alongside
+full episodes (Lex Fridman: 855 videos, only 560 over 30 min) would put the
+same words in the corpus twice, so search returns one moment under two
+episode ids. `--min-duration 30m` on `sources add` stores the threshold on
+the source, and every later `qs ingest` honours it without the flag;
+passing it to `ingest` overrides for one run. Accepts `1800`, `30m`,
+`1h30m`. Episodes whose duration is unknown are kept.
 
 **Notes for agents**
 - Ranges you pass to `pull` are snapped *outward* to sentence boundaries
