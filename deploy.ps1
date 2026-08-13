@@ -42,7 +42,10 @@ if (-not $Check) {
     Step "push"
     $dirty = git status --porcelain
     if ($dirty) { Die "working tree is dirty; commit or stash first`n$dirty" }
-    git push origin main 2>&1 | Out-Null
+    # No 2>&1 here: git writes progress to stderr, and redirecting a native
+    # command's stderr in PowerShell 5.1 turns every line into an error
+    # record - which aborts this script even on a successful push.
+    git push origin main
     if ($LASTEXITCODE -ne 0) { Die "git push failed" }
     Ok "pushed"
 }
