@@ -130,15 +130,27 @@ def poll_job(job_id: str, kind: str = "pull", interval: float = 1.0,
     raise RemoteError(f"remote {kind} job {job_id} did not finish in {max_wait:.0f}s", 504)
 
 
-async def adopt_remote_item(root: Path, remote_item: dict) -> dict:
+def manifest_name(filename: str, remote_item: dict = None) -> str:
+    """Sidecar name for a clip: qs cut *replaces* the extension, not appends."""
+    stated = (remote_item or {}).get("manifest")
+    if stated:
+        return Path(stated).name
+    return Path(filename).with_suffix(".words.json").name
+
+
+async def adopt_remote_item(root: Path, remote_item: dict,
+                            palette_name: str = None, person: str = None,
+                            kind: str = "cut") -> dict:
     """Copy a clip the remote just produced into the local library.
 
-    The remote staged it into *its* library; we want it in ours, with a local
-    thumbnail and id but the same attribution, tags and palettes — those are
-    the parts that make the clip citable, and regenerating them here would
-    risk them drifting from what the server recorded.
+    Attribution travels verbatim — it is what makes the clip citable, and
+    rebuilding it here could let it drift from what the server recorded.
+    Tags and palette membership do not travel: palettes are stored as ids,
+    and the remote's ids refer to *its* palettes, so copying them would point
+    at nothing here. They are reapplied by name instead, matching what
+    cut_quote/pull do locally.
     """
-    from .library import load_library, register_media_file, save_library
+    from .library import load_library, new_palette, register_media_file, save_library
 
     filename = remote_item.get("filename")
     if not filename:
@@ -149,24 +161,43 @@ async def adopt_remote_item(root: Path, remote_item: dict) -> dict:
         if not fetch_file(filename, dest):
             raise RemoteError(f"remote produced {filename} but will not serve it", 502)
 
-    # qs cut writes per-word timings beside the audio; without them the clip
-    # cannot drive visual beats, so it is part of the artifact, not extra.
-    sidecar = f"{filename}.words.json"
-    fetch_file(sidecar, root / "media" / sidecar)
+    # Per-word timings are what let visual beats land on specific words, so
+    # the manifest is part of the artifact rather than an optional extra.
+    # A plain pull has none; a cut that lost one is worth knowing about.
+    sidecar = manifest_name(filename, remote_item)
+    got_manifest = fetch_file(sidecar, root / "media" / sidecar)
+    if kind == "cut" and not got_manifest:
+        raise RemoteError(f"cut produced no manifest ({sidecar}) — the clip "
+                          f"cannot drive word-level beats without it", 502)
 
     item = await register_media_file(
         root, filename, remote_item.get("title") or filename,
         remote_item.get("url"))
 
-    carried = {k: remote_item[k] for k in
-               ("tags", "palettes", "attribution", "url", "title")
-               if remote_item.get(k)}
-    if carried:
-        lib = load_library(root)
-        for existing in lib["items"]:
-            if existing["id"] == item["id"]:
-                existing.update(carried)
-                item = existing
-                break
-        save_library(root, lib)
-    return item
+    lib = load_library(root)
+    it = next((i for i in lib["items"] if i["id"] == item["id"]), None)
+    if it is None:
+        return item
+
+    for key in ("attribution", "url", "title"):
+        if remote_item.get(key):
+            it[key] = remote_item[key]
+    if got_manifest:
+        it["manifest"] = sidecar
+
+    tags = ["quotesource"] + (["word-cut"] if kind == "cut" else [])
+    if person:
+        tags.append(person)
+    it["tags"] = sorted(set(it.get("tags", []) + tags))
+
+    if palette_name:
+        pal = next((p for p in lib["palettes"]
+                    if p["name"].lower() == palette_name.lower()), None)
+        if not pal:
+            pal = new_palette(palette_name)
+            lib["palettes"].append(pal)
+        if pal["id"] not in it["palettes"]:
+            it["palettes"].append(pal["id"])
+
+    save_library(root, lib)
+    return it

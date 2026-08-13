@@ -518,8 +518,13 @@ def _start_remote_job(kind: str, body: dict):
                 raise RuntimeError(finished["error"])
 
             job["stage"] = "downloading"
-            job["item"] = _asyncio.run(
-                qs_remote.adopt_remote_item(_root(), finished["item"]))
+            # Palette and person are reapplied here rather than copied from
+            # the remote: its palette ids belong to its own library.
+            job["item"] = _asyncio.run(qs_remote.adopt_remote_item(
+                _root(), finished["item"],
+                palette_name=body.get("palette") or None,
+                person=body.get("person") or None,
+                kind=kind))
             job["stage"] = "done"
         except Exception as e:
             job["error"] = str(e)
