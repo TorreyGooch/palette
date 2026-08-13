@@ -536,7 +536,10 @@ def _start_remote_job(kind: str, body: dict):
         import asyncio as _asyncio
 
         try:
-            started = qs_remote.post(f"/api/qs/{kind}", body)
+            # The remote produces the clip; this library owns it. Staging it
+            # there too would leave a second copy on a machine that never
+            # opens it, on a disk shared with model checkpoints.
+            started = qs_remote.post(f"/api/qs/{kind}", {**body, "stage": False})
             remote_id = started["job_id"]
             job["stage"] = "remote:queued"
 
@@ -566,6 +569,16 @@ def _start_remote_job(kind: str, body: dict):
                 palette_name=body.get("palette") or None,
                 person=body.get("person") or None,
                 kind=kind))
+
+            # Only once the clip is safely here. Failing to clean up leaves
+            # a stray file; cleaning up too early loses it outright.
+            try:
+                qs_remote.post("/api/qs/discard",
+                               {"filename": finished["item"]["filename"]},
+                               timeout=30)
+            except qs_remote.RemoteError:
+                pass  # a leftover file is not worth failing an adopted clip
+
             job["stage"] = "done"
         except Exception as e:
             job["error"] = str(e)
@@ -604,6 +617,7 @@ def qs_pull(body: dict = Body(...)):
                 pad=float(body.get("pad") or 0),
                 rough=bool(body.get("rough", False)),
                 progress_cb=lambda stage: job.__setitem__("stage", stage),
+                stage=bool(body.get("stage", True)),
             )
             job["stage"] = "done"
         except Exception as e:
@@ -614,6 +628,43 @@ def qs_pull(body: dict = Body(...)):
 
     threading.Thread(target=_run_job, daemon=True).start()
     return {"job_id": job_id}
+
+
+@app.post("/api/qs/discard")
+def qs_discard(body: dict = Body(...)):
+    """Delete a clip whose caller has taken ownership of it.
+
+    A remote pull/cut runs with stage=False, so the file sits in this
+    library's media folder without a library entry. Once the caller has it,
+    keeping the bytes here just accumulates media this machine never opens.
+    """
+    if _remote():
+        from . import qs_remote
+
+        return _remote_call(lambda: qs_remote.post("/api/qs/discard", body, timeout=30))
+
+    root = _root()
+    filename = (body.get("filename") or "").strip()
+    if not filename:
+        raise HTTPException(400, "filename required")
+
+    media = (root / "media").resolve()
+    target = (media / filename).resolve()
+    # The name arrives over the network, so refuse anything that resolves
+    # outside the media folder rather than trusting it.
+    if target.parent != media:
+        raise HTTPException(400, "filename must name a file in media/")
+
+    lib = load_library(root)
+    if any(i["filename"] == filename for i in lib["items"]):
+        return {"discarded": False, "reason": "this library references it"}
+
+    removed = []
+    for path in (target, target.with_suffix(".words.json")):
+        if path.exists():
+            path.unlink()
+            removed.append(path.name)
+    return {"discarded": bool(removed), "removed": removed}
 
 
 @app.get("/api/qs/pull/{job_id}")
@@ -650,6 +701,7 @@ def qs_cut(body: dict = Body(...)):
                 person=body.get("person") or None,
                 model_size=body.get("model") or None,
                 progress_cb=lambda stage: job.__setitem__("stage", stage),
+                stage=bool(body.get("stage", True)),
             )
             job["item"] = {"title": res["filename"], **res}
             job["stage"] = "done"

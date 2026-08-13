@@ -192,9 +192,15 @@ async def _fetch_rss_audio(audio_url: str, start: float, end: float,
 
 def pull(episode_id: str, start: float, end: float, mode: str = "av",
          palette_name: str | None = None, person: str | None = None,
-         pad: float = 0.0, rough: bool = False, progress_cb=None) -> dict:
+         pad: float = 0.0, rough: bool = False, progress_cb=None,
+         stage: bool = True) -> dict:
     """Snap, fetch, stage. Returns staged item JSON (with attribution).
-    progress_cb, if given, receives stage strings as work proceeds."""
+    progress_cb, if given, receives stage strings as work proceeds.
+
+    stage=False writes the clip and returns its attribution without adding it
+    to this library. A remote caller adopting the clip into its own library
+    wants that: staging here too would leave a second copy on a machine that
+    never looks at it."""
     from palette_app.config import get_library_path
     from palette_app.library import (
         ensure_library, load_library, save_library, new_palette,
@@ -259,16 +265,10 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
     except Exception:
         pass
 
-    _progress("registering in library")
+    _progress("registering in library" if stage else "preparing hand-off")
     quote_short = snapped["quote_text"][:70].rstrip()
     title = f'“{quote_short}…” — {meta.get("title", episode_id)[:60]}'
-    item = asyncio.run(register_media_file(lib_root, filename, title))
-
-    # attach attribution + palette + tags directly
-    lib = load_library(lib_root)
-    it = next(i for i in lib["items"] if i["id"] == item["id"])
-    it["url"] = _ts_url(url, s)
-    it["attribution"] = {
+    attribution = {
         "person": person,
         "show": meta.get("source_id"),
         "episode_id": episode_id,
@@ -287,6 +287,21 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
     tags = ["quotesource"]
     if person:
         tags.append(person)
+
+    if not stage:
+        # Shaped like a library item so an adopting caller needs no special
+        # case, but nothing is written to this library.
+        return {"filename": filename, "path": str(dest), "title": title,
+                "url": _ts_url(url, s), "attribution": attribution,
+                "tags": tags, "staged": False}
+
+    item = asyncio.run(register_media_file(lib_root, filename, title))
+
+    # attach attribution + palette + tags directly
+    lib = load_library(lib_root)
+    it = next(i for i in lib["items"] if i["id"] == item["id"])
+    it["url"] = _ts_url(url, s)
+    it["attribution"] = attribution
     it["tags"] = sorted(set(it.get("tags", []) + tags))
 
     if palette_name:
