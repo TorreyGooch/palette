@@ -197,7 +197,8 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
     progress_cb, if given, receives stage strings as work proceeds."""
     from palette_app.config import get_library_path
     from palette_app.library import (
-        load_library, save_library, new_palette, register_media_file,
+        ensure_library_dirs, load_library, save_library, new_palette,
+        register_media_file,
     )
 
     def _progress(stage: str):
@@ -221,6 +222,7 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
     lib_root = get_library_path()
     if not lib_root:
         raise RuntimeError("palette library not configured — run the app once")
+    ensure_library_dirs(lib_root)
 
     ext = "mp4" if mode == "av" else "m4a"
     filename = f"qs_{episode_id}_{int(s)}_{int(e)}.{ext}"

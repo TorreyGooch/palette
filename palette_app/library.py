@@ -11,10 +11,22 @@ VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".opus", ".ogg", ".wav", ".flac"}
 
 
-def create_library(root: Path) -> dict:
+def ensure_library_dirs(root: Path) -> Path:
+    """Make sure the library's subfolders exist. Idempotent.
+
+    A library root can come into existence without create_library() ever
+    running — restored from a backup, or assembled by hand when moving to a
+    new machine. Writers then aim at a folder that is not there, and ffmpeg
+    reports that as a bare "exit status 254" with nothing about the cause.
+    """
     root.mkdir(parents=True, exist_ok=True)
     for folder in SUBFOLDERS:
         (root / folder).mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def create_library(root: Path) -> dict:
+    ensure_library_dirs(root)
     lib = {
         "created": datetime.now().isoformat(),
         "items": [],

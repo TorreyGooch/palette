@@ -357,7 +357,8 @@ def cut_quote(episode_id: str, start: float, end: float,
     """Whisper a window, snap to the waveform, cut, manifest, stage."""
     from palette_app.config import get_library_path
     from palette_app.library import (
-        load_library, save_library, new_palette, register_media_file,
+        ensure_library_dirs, load_library, save_library, new_palette,
+        register_media_file,
     )
 
     def _progress(msg):
@@ -433,6 +434,7 @@ def cut_quote(episode_id: str, start: float, end: float,
     lib_root = get_library_path()
     if not lib_root:
         raise RuntimeError("palette library not configured — run the app once")
+    ensure_library_dirs(lib_root)
 
     filename = f"qs_cut_{episode_id}_{int(abs_start)}_{int(abs_end)}.m4a"
     dest = lib_root / "media" / filename
