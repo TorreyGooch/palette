@@ -58,16 +58,31 @@ def _get_model():
         return TextEmbedding(model_name())
 
 
+def stored_model(con: sqlite3.Connection) -> str | None:
+    """The model the existing vectors were built with, or None if unembedded."""
+    row = con.execute("SELECT value FROM embedding_meta WHERE key='model'").fetchone()
+    return row[0] if row else None
+
+
 def embed_stats() -> dict:
     con = connect()
     _ensure_schema(con)
     con.executescript(EMBED_SCHEMA)
     total = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     done = con.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+    # Report what the vectors actually are, not what this shell happens to be
+    # configured for — otherwise status misreports whenever QS_EMBED_MODEL is
+    # unset in the calling environment but the store was built with another.
+    stored = stored_model(con)
     con.close()
-    return {"chunks": total, "embedded": done,
-            "coverage": round(done / total, 4) if total else 0.0,
-            "model": model_name()}
+    stats = {"chunks": total, "embedded": done,
+             "coverage": round(done / total, 4) if total else 0.0,
+             "model": stored or model_name()}
+    if stored and stored != model_name():
+        stats["model_mismatch"] = (
+            f"vectors are '{stored}' but QS_EMBED_MODEL is '{model_name()}'; "
+            f"search will refuse until they agree")
+    return stats
 
 
 def embed_pending(batch_size: int = 256, limit: int | None = None,

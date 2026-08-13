@@ -260,6 +260,8 @@ def cmd_status(args):
     emb = data.get("embeddings")
     if emb and emb.get("embedded"):
         print(f"embeddings: {emb['embedded']}/{emb['chunks']} ({emb['coverage']:.0%}) [{emb['model']}]")
+        if emb.get("model_mismatch"):
+            print(f"  WARNING: {emb['model_mismatch']}")
     print()
     hdr = f"{'source':<22}{'episodes':>9}{'captions':>9}{'whisper':>9}{'needs_tx':>9}{'pending':>9}"
     print(hdr)
