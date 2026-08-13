@@ -5,3 +5,9 @@ __pycache__/
 venv/
 config.json
 *.log
+
+# The media library and corpus: gigabytes of video, audio and transcripts
+# that belong on disk, not in git. config.json points at whichever folder is
+# in use; this covers the default location beside the repo. Without it a
+# `git add -A` walks ~1.8 GB and stalls long enough to leave an index.lock.
+/Library/
