@@ -276,6 +276,47 @@ def cmd_status(args):
           f"{t['needs_transcription']:>9}{t['captions_pending']:>9}")
 
 
+# Commands that read the corpus off disk. `sources` and `status` are useful
+# even with no corpus, so they are not listed.
+_NEEDS_CORPUS = {
+    "episodes", "index", "embed", "grep", "search", "context",
+    "episode-info", "transcribe", "pull", "words", "cut",
+}
+
+
+def _warn_if_corpus_elsewhere(command: str):
+    """Say where the corpus went instead of reporting an empty one.
+
+    The CLI reads the corpus directly and cannot proxy to QS_REMOTE the way
+    the web app does. When the corpus has moved to another machine, every
+    command here would otherwise return zero results as though the corpus
+    were merely empty, which reads like data loss rather than a relocation.
+    """
+    import os
+    import sys
+
+    from .paths import data_root
+
+    if command not in _NEEDS_CORPUS:
+        return
+    # ensure_root() creates an empty episodes/ as scaffolding, so its mere
+    # existence proves nothing — look for actual sources inside it.
+    episodes = data_root() / "episodes"
+    if episodes.is_dir() and any(episodes.iterdir()):
+        return
+
+    remote = os.environ.get("QS_REMOTE")
+    print(f"No corpus at {data_root()}", file=sys.stderr)
+    if remote:
+        print(f"The app is configured to use the corpus at {remote}; the CLI "
+              f"cannot proxy there.\nRun qs on that machine, or use the app's "
+              f"Quotes page from here.", file=sys.stderr)
+    else:
+        print("Run `qs ingest` to build one, or point QUOTESOURCE_DATA at an "
+              "existing corpus.", file=sys.stderr)
+    raise SystemExit(1)
+
+
 def main(argv=None):
     shared = argparse.ArgumentParser(add_help=False)
     shared.add_argument("--pretty", action="store_true", help="human output instead of JSON")
@@ -399,6 +440,7 @@ def main(argv=None):
     p.set_defaults(func=cmd_transcribe)
 
     args = parser.parse_args(argv)
+    _warn_if_corpus_elsewhere(args.command)
 
     try:
         args.func(args)

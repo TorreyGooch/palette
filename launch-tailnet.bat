@@ -5,6 +5,13 @@ cd /d "%~dp0"
 
 set "PALETTE_HOST=tailscale"
 
+rem Same corpus wiring as launch.bat — see the comment there.
+if "%PALETTE_LOCAL%"=="1" (
+  set "QS_REMOTE="
+) else (
+  if not defined QS_REMOTE set "QS_REMOTE=http://100.102.79.115:7862"
+)
+
 set "PY_EXE="
 where py >nul 2>nul && set "PY_EXE=py"
 if not defined PY_EXE (
