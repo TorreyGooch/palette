@@ -156,10 +156,13 @@ async def adopt_remote_item(root: Path, remote_item: dict,
     if not filename:
         raise RemoteError("remote job returned no filename", 502)
 
+    # Always fetch, even when the name already exists locally. Clip filenames
+    # truncate their bounds to whole seconds, so two cuts a fraction of a
+    # second apart collide — and keeping the old audio beside the new manifest
+    # would leave word timings describing a clip that is not there.
     dest = root / "media" / filename
-    if not dest.exists():
-        if not fetch_file(filename, dest):
-            raise RemoteError(f"remote produced {filename} but will not serve it", 502)
+    if not fetch_file(filename, dest):
+        raise RemoteError(f"remote produced {filename} but will not serve it", 502)
 
     # Per-word timings are what let visual beats land on specific words, so
     # the manifest is part of the artifact rather than an optional extra.
