@@ -11,6 +11,8 @@ episode (e.g. whisper replacing captions) naturally queues its new chunks.
 """
 import os
 import sqlite3
+import threading
+import time
 from datetime import datetime
 
 from .indexer import connect, _ensure_schema
@@ -46,7 +48,7 @@ def _ensure_embed_schema(con: sqlite3.Connection):
     con.commit()
 
 
-def _get_model():
+def _build_model():
     from fastembed import TextEmbedding
 
     # GPU path: pip install fastembed-gpu (onnxruntime-gpu). Auto-detected;
@@ -56,6 +58,75 @@ def _get_model():
             "CUDAExecutionProvider", "CPUExecutionProvider"])
     except Exception:
         return TextEmbedding(model_name())
+
+
+# Constructing the ONNX session costs ~0.9s; embedding a query with one
+# already built costs ~6ms. A CLI process paid that once and exited, so it
+# never mattered. A long-lived server paid it on every single search.
+#
+# Held only while searches keep arriving: this box shares its memory with
+# ComfyUI, and a model kept resident through an idle night is memory taken
+# from generation for nothing. QS_MODEL_IDLE_S=0 keeps it forever, -1
+# disables caching entirely.
+_MODEL_IDLE_S = float(os.environ.get("QS_MODEL_IDLE_S", "600"))
+
+_model = None
+_model_key = None
+_model_used = 0.0
+_model_lock = threading.Lock()
+_evictor = None
+
+
+def _evict_when_idle():
+    """Drop the model once no search has wanted it for _MODEL_IDLE_S."""
+    global _model, _model_key, _evictor
+
+    while True:
+        with _model_lock:
+            if _model is None:
+                _evictor = None
+                return
+            idle = time.monotonic() - _model_used
+            if idle >= _MODEL_IDLE_S:
+                _model = _model_key = None
+                _evictor = None
+                return
+            wait = _MODEL_IDLE_S - idle
+        time.sleep(min(wait, 30.0))
+
+
+def _get_model():
+    global _model, _model_key, _model_used, _evictor
+
+    if _MODEL_IDLE_S < 0:
+        return _build_model()
+
+    key = model_name()
+    with _model_lock:
+        if _model is not None and _model_key == key:
+            _model_used = time.monotonic()
+            return _model
+
+    # Built outside the lock: a first search should not block a second one
+    # behind a slow session init, and building twice is merely wasteful.
+    model = _build_model()
+
+    with _model_lock:
+        if _model is None or _model_key != key:
+            _model, _model_key = model, key
+        _model_used = time.monotonic()
+        if _MODEL_IDLE_S > 0 and _evictor is None:
+            _evictor = threading.Thread(target=_evict_when_idle, daemon=True)
+            _evictor.start()
+        return _model
+
+
+def release_model():
+    """Drop the cached model now. For tests and for freeing memory on demand."""
+    global _model, _model_key
+
+    with _model_lock:
+        _model = _model_key = None
 
 
 def stored_model(con: sqlite3.Connection) -> str | None:
