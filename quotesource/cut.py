@@ -1,10 +1,10 @@
-"""Word-accurate clipping.
+﻿"""Word-accurate clipping.
 
 The transcript finds it; the waveform cuts it.
 
 Caption-quality search locates a quote. We then whisper only a short window
 around it (with word timestamps), and use energy analysis of the actual audio
-to find true speech onset/offset — whisper's word times are attention-derived
+to find true speech onset/offset â€” whisper's word times are attention-derived
 and routinely drift 50-100ms, which at a phrase head clips the opening
 consonant. Word timings locate the region; the waveform decides the cut.
 
@@ -34,13 +34,13 @@ SEARCH_MS = float(os.environ.get("QS_CUT_SEARCH_MS", "200"))
 MIN_SILENCE_MS = float(os.environ.get("QS_CUT_MIN_SILENCE_MS", "70"))
 
 # Tail: how far past the requested end we may go looking for a real pause.
-# Kept short on purpose — a generous value walks forward to the next pause
+# Kept short on purpose â€” a generous value walks forward to the next pause
 # and drags whole extra words in with it ("...blew me away. You know, it's
 # so,"). Better to stop where asked and fade than to change the quote.
 EXTEND_MS = float(os.environ.get("QS_CUT_EXTEND_MS", "300"))
 
 # Head: how far forward we may snap to reach speech. Generous, because
-# skipping leading silence only ever removes dead air — it cannot add words.
+# skipping leading silence only ever removes dead air â€” it cannot add words.
 HEAD_SNAP_MS = float(os.environ.get("QS_CUT_HEAD_SNAP_MS", "1500"))
 
 # Applied at the tail when no natural pause exists within reach, so a
@@ -57,7 +57,7 @@ ANALYSIS_SR = 16000
 MIN_SPEECH_MS = 30.0    # sustained energy required to call something speech
 
 
-# ── audio sourcing ────────────────────────────────────────────────────────────
+# â”€â”€ audio sourcing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _source_media(episode_id: str, ep_dir: Path) -> Path:
     """Local full media for the episode: corpus audio, cache, or download."""
@@ -89,7 +89,7 @@ def _decode_window(src: Path, start: float, duration: float, dest: Path):
     )
 
 
-# ── energy analysis ───────────────────────────────────────────────────────────
+# â”€â”€ energy analysis â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _frame_rms(wav_path: Path):
     """Return (rms_per_frame, frame_seconds) for a mono 16k wav."""
@@ -170,8 +170,8 @@ def snap_to_speech(rms, frame_s: float, region_start: float,
                    region_end: float) -> dict:
     """Find true speech onset/offset around a word-level region.
 
-    Rather than taking the last loud frame in a fixed window — which just
-    cuts wherever the window happens to fall when a speaker runs on — this
+    Rather than taking the last loud frame in a fixed window â€” which just
+    cuts wherever the window happens to fall when a speaker runs on â€” this
     locates the speech *run* containing each boundary and uses its true
     edges. When the run continues past EXTEND_MS beyond the requested end
     there is no natural pause to land on; that is reported rather than
@@ -194,7 +194,7 @@ def snap_to_speech(rms, frame_s: float, region_start: float,
     def t(i):
         return i * frame_s
 
-    # ── onset: start of the run covering region_start, else the next run.
+    # â”€â”€ onset: start of the run covering region_start, else the next run.
     # Searching out to `extend` matters: a requested start sitting in a long
     # pause would otherwise keep all that dead air.
     onset, head_clean = region_start, False
@@ -207,7 +207,7 @@ def snap_to_speech(rms, frame_s: float, region_start: float,
                 onset, head_clean = t(a), True
             break
 
-    # ── offset: end of the run covering region_end
+    # â”€â”€ offset: end of the run covering region_end
     offset, tail_clean = region_end, False
     for a, b in runs:
         if t(a) <= region_end and t(b) >= region_end - search:
@@ -273,7 +273,7 @@ def edge_report(rms, frame_s: float, cut_start: float, cut_end: float) -> dict:
     }
 
 
-# ── whisper word timings ──────────────────────────────────────────────────────
+# â”€â”€ whisper word timings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def window_words(wav_path: Path, model_size: str | None = None) -> list[dict]:
     """Word timings for a short window, relative to the window start."""
@@ -348,7 +348,7 @@ def _match_quote_region(words: list[dict], want_start: float,
     return inside[0]["start"], inside[-1]["end"]
 
 
-# ── main entry ────────────────────────────────────────────────────────────────
+# â”€â”€ main entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def cut_quote(episode_id: str, start: float, end: float,
               palette_name: str | None = None, person: str | None = None,
@@ -357,7 +357,7 @@ def cut_quote(episode_id: str, start: float, end: float,
     """Whisper a window, snap to the waveform, cut, manifest, stage."""
     from palette_app.config import get_library_path
     from palette_app.library import (
-        ensure_library_dirs, load_library, save_library, new_palette,
+        ensure_library, load_library, save_library, new_palette,
         register_media_file,
     )
 
@@ -433,8 +433,8 @@ def cut_quote(episode_id: str, start: float, end: float,
 
     lib_root = get_library_path()
     if not lib_root:
-        raise RuntimeError("palette library not configured — run the app once")
-    ensure_library_dirs(lib_root)
+        raise RuntimeError("palette library not configured â€” run the app once")
+    ensure_library(lib_root)
 
     filename = f"qs_cut_{episode_id}_{int(abs_start)}_{int(abs_end)}.m4a"
     dest = lib_root / "media" / filename
@@ -491,7 +491,7 @@ def cut_quote(episode_id: str, start: float, end: float,
 
     _progress("staging")
     quote_short = quote_text[:70].rstrip()
-    title = f'“{quote_short}…” — {meta.get("title", episode_id)[:60]}'
+    title = f'â€œ{quote_short}â€¦â€ â€” {meta.get("title", episode_id)[:60]}'
     item = asyncio.run(register_media_file(lib_root, filename, title))
 
     lib = load_library(lib_root)

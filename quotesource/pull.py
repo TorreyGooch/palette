@@ -1,4 +1,4 @@
-"""qs pull — turn a verified hit into a staged item on a palette.
+﻿"""qs pull â€” turn a verified hit into a staged item on a palette.
 
 Range snapping: the requested range expands outward to sentence boundaries
 read from the transcript (capped extension); sentence-level precision is the
@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .search import _find_episode_dir, _ts_url
 
-SENTENCE_END = (".", "!", "?", "…", '."', '!"', '?"')
+SENTENCE_END = (".", "!", "?", "â€¦", '."', '!"', '?"')
 MAX_EXTENSION_S = 12.0
 FETCH_PAD_S = 6.0
 
@@ -87,7 +87,7 @@ async def _get_full_media(episode_id: str, url: str, mode: str,
                           ep_dir: Path) -> Path | None:
     """Return a local full copy of the episode's media for cutting.
 
-    Priority for flow: 1) the corpus audio store (audio mode — free after
+    Priority for flow: 1) the corpus audio store (audio mode â€” free after
     Phase 2 transcription has run), 2) the pull cache (instant repeat pulls
     from the same episode), 3) download full stream into the cache.
 
@@ -161,7 +161,7 @@ async def _fetch_youtube_section(url: str, start: float, end: float,
 
     if mode == "av":
         if rough:
-            # stream copy: starts at the keyframe at/before s — no re-encode
+            # stream copy: starts at the keyframe at/before s â€” no re-encode
             code, _, _ = await _run([
                 "ffmpeg", "-y", "-ss", str(s), "-i", str(src),
                 "-t", str(e - s), "-c", "copy",
@@ -197,7 +197,7 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
     progress_cb, if given, receives stage strings as work proceeds."""
     from palette_app.config import get_library_path
     from palette_app.library import (
-        ensure_library_dirs, load_library, save_library, new_palette,
+        ensure_library, load_library, save_library, new_palette,
         register_media_file,
     )
 
@@ -221,8 +221,8 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
 
     lib_root = get_library_path()
     if not lib_root:
-        raise RuntimeError("palette library not configured — run the app once")
-    ensure_library_dirs(lib_root)
+        raise RuntimeError("palette library not configured â€” run the app once")
+    ensure_library(lib_root)
 
     ext = "mp4" if mode == "av" else "m4a"
     filename = f"qs_{episode_id}_{int(s)}_{int(e)}.{ext}"
@@ -261,7 +261,7 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
 
     _progress("registering in library")
     quote_short = snapped["quote_text"][:70].rstrip()
-    title = f'“{quote_short}…” — {meta.get("title", episode_id)[:60]}'
+    title = f'â€œ{quote_short}â€¦â€ â€” {meta.get("title", episode_id)[:60]}'
     item = asyncio.run(register_media_file(lib_root, filename, title))
 
     # attach attribution + palette + tags directly

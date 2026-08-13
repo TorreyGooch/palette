@@ -11,22 +11,27 @@ VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".opus", ".ogg", ".wav", ".flac"}
 
 
-def ensure_library_dirs(root: Path) -> Path:
-    """Make sure the library's subfolders exist. Idempotent.
+def ensure_library(root: Path) -> Path:
+    """Make a library root usable: subfolders and a database. Idempotent.
 
-    A library root can come into existence without create_library() ever
-    running — restored from a backup, or assembled by hand when moving to a
-    new machine. Writers then aim at a folder that is not there, and ffmpeg
-    reports that as a bare "exit status 254" with nothing about the cause.
+    A root can come into existence without create_library() ever running —
+    restored from a backup, or assembled by hand when moving to a new
+    machine. Writers then aim at folders that are not there (ffmpeg reports
+    that as a bare "exit status 254", saying nothing about a missing
+    directory) or read a library.json that does not exist. Preserves an
+    existing database; only the missing pieces are created.
     """
     root.mkdir(parents=True, exist_ok=True)
     for folder in SUBFOLDERS:
         (root / folder).mkdir(parents=True, exist_ok=True)
+    if not (root / "library.json").exists():
+        save_library(root, {"created": datetime.now().isoformat(),
+                            "items": [], "palettes": []})
     return root
 
 
 def create_library(root: Path) -> dict:
-    ensure_library_dirs(root)
+    ensure_library(root)
     lib = {
         "created": datetime.now().isoformat(),
         "items": [],
