@@ -194,10 +194,29 @@ async def delete_item(iid: str):
     item = _find(lib["items"], iid)
     if not item:
         raise HTTPException(404)
-    for p in [root / "media" / item["filename"], root / "thumbnails" / f"{iid}.jpg"]:
-        if p.exists():
-            p.unlink()
-    lib["items"] = [i for i in lib["items"] if i["id"] != iid]
+
+    remaining = [i for i in lib["items"] if i["id"] != iid]
+
+    # Several items can point at one file — clip filenames truncate their
+    # bounds to whole seconds, so two cuts a fraction apart collide, and
+    # re-staging the same quote makes another item. Unlinking on the first
+    # delete would leave every other item pointing at nothing, so the media
+    # only goes when its last reference does.
+    if not any(i["filename"] == item["filename"] for i in remaining):
+        media = root / "media" / item["filename"]
+        if media.exists():
+            media.unlink()
+        # The word manifest is part of the clip, not a separate asset; left
+        # behind it just accumulates beside media that no longer exists.
+        sidecar = media.with_suffix(".words.json")
+        if sidecar.exists():
+            sidecar.unlink()
+
+    thumb = root / "thumbnails" / f"{iid}.jpg"  # keyed by item id, never shared
+    if thumb.exists():
+        thumb.unlink()
+
+    lib["items"] = remaining
     save_library(root, lib)
     return {"ok": True}
 
