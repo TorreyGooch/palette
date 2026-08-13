@@ -14,6 +14,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from . import registry
 from .paths import episode_dir, ensure_root
 from .transcripts import normalize_captions
 
@@ -87,6 +88,7 @@ def _enumerate_youtube(url: str, source_type: str) -> list[dict]:
             "episode_id": e["id"],
             "url": e.get("url") or f"https://www.youtube.com/watch?v={e['id']}",
             "title": e.get("title") or "",
+            "duration": e.get("duration"),
         })
     return out
 
@@ -219,7 +221,8 @@ def _fetch_rss_episode(source: dict, entry: dict, quiet: bool) -> dict:
 
 # ── Driver ────────────────────────────────────────────────────────────────────
 
-def ingest_source(source: dict, limit: int | None = None, quiet: bool = False) -> dict:
+def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
+                  min_duration: int | None = None) -> dict:
     ensure_root()
     stype = source["type"]
     if not quiet:
@@ -232,9 +235,31 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False) -
     else:
         raise ValueError(f"unknown source type: {stype}")
 
+    enumerated = len(entries)
+    if min_duration is None:
+        min_duration = registry.parse_duration(source.get("min_duration"))
+
+    # Channels that publish clips alongside full episodes would otherwise put
+    # the same words in the corpus twice. Unknown durations are kept, because
+    # silently dropping a real episode is worse than admitting a clip.
+    too_short = 0
+    if min_duration:
+        kept = []
+        for entry in entries:
+            duration = entry.get("duration")
+            if duration is not None and duration < min_duration:
+                too_short += 1
+                continue
+            kept.append(entry)
+        entries = kept
+        _log(quiet, f"[{source['id']}] {too_short} under {min_duration}s skipped, "
+                    f"{len(entries)} to consider")
+
     result = {
         "source": source["id"],
-        "enumerated": len(entries),
+        "enumerated": enumerated,
+        "min_duration": min_duration,
+        "too_short": too_short,
         "new": 0, "retried": 0, "skipped": 0, "failed": 0,
         "episodes": [],
     }

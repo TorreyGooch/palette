@@ -12,9 +12,30 @@ TEMPLATE = """\
 #     type: youtube_channel | youtube_playlist | rss
 #     url: https://...
 #     people: [Host Name]       # default speaker metadata for the source
+#     min_duration: 1800        # optional; skip anything shorter (seconds)
 #     notes: optional free text
 sources: []
 """
+
+_DUR_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([hms]?)", re.I)
+
+
+def parse_duration(value) -> int:
+    """Seconds from '1800', '30m', '1h', '1h30m'. Bare numbers are seconds."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    matches = _DUR_RE.findall(text)
+    if not matches or "".join(n + u for n, u in matches) != text.replace(" ", ""):
+        raise ValueError(f"bad duration: {value!r} (try 1800, 30m, 1h30m)")
+    total = 0.0
+    for number, unit in matches:
+        total += float(number) * {"h": 3600, "m": 60, "s": 1, "": 1}[unit]
+    return int(total)
 
 
 def _load_yaml():
@@ -47,7 +68,8 @@ def get_source(source_id: str) -> dict | None:
 
 
 def add_source(source_id: str, name: str, type_: str, url: str,
-               people: list[str] | None = None, notes: str = "") -> dict:
+               people: list[str] | None = None, notes: str = "",
+               min_duration=None) -> dict:
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", source_id):
         raise ValueError(f"id must be a lowercase slug, got: {source_id!r}")
     if type_ not in VALID_TYPES:
@@ -62,6 +84,9 @@ def add_source(source_id: str, name: str, type_: str, url: str,
         "url": url,
         "people": people or [],
     }
+    seconds = parse_duration(min_duration)
+    if seconds:
+        entry["min_duration"] = seconds
     if notes:
         entry["notes"] = notes
     sources.append(entry)

@@ -58,6 +58,7 @@ def cmd_sources(args):
         entry = registry.add_source(
             args.id, args.name, args.type, args.url,
             people=args.people, notes=args.notes or "",
+            min_duration=args.min_duration,
         )
         _out(entry, args.pretty)
     elif args.action == "remove":
@@ -85,10 +86,16 @@ def cmd_ingest(args):
             _fail(f"source '{args.source_id}' not found")
         sources = [src]
 
+    try:
+        override = registry.parse_duration(args.min_duration)
+    except ValueError as e:
+        _fail(str(e), 2)
+
     results = []
     for src in sources:
         try:
-            results.append(ingest_source(src, limit=args.limit, quiet=args.quiet))
+            results.append(ingest_source(src, limit=args.limit, quiet=args.quiet,
+                                         min_duration=override))
         except Exception as e:
             results.append({"source": src["id"], "error": str(e)})
     _out(results if args.all else results[0], args.pretty)
@@ -285,6 +292,8 @@ def main(argv=None):
     p.add_argument("--url")
     p.add_argument("--people", nargs="*", default=None)
     p.add_argument("--notes")
+    p.add_argument("--min-duration", default=None,
+                   help="skip anything shorter, e.g. 30m or 1800; stored on the source")
     p.set_defaults(func=cmd_sources)
 
     p = sub.add_parser("ingest", help="fetch episode metadata and captions", parents=[shared])
@@ -292,6 +301,8 @@ def main(argv=None):
     p.add_argument("--all", action="store_true")
     p.add_argument("--limit", type=int, default=None, help="max new episodes per source")
     p.add_argument("--quiet", action="store_true", help="suppress progress lines")
+    p.add_argument("--min-duration", default=None,
+                   help="override the source's min_duration for this run")
     p.set_defaults(func=cmd_ingest)
 
     p = sub.add_parser("episodes", help="list episodes for a source with transcript status", parents=[shared])
