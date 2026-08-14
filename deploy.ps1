@@ -107,7 +107,14 @@ $lines = @($out)
 $from = [array]::IndexOf($lines, "DIRTY<<EOF")
 $to = [array]::IndexOf($lines, "EOF")
 if ($from -ge 0 -and $to -gt $from) {
-    $serverDirty = $lines[($from + 1)..($to - 1)] | Where-Object { $_.Trim() }
+    # Guard the slice: with a clean tree the markers are adjacent, and
+    # PowerShell silently reverses a range whose start exceeds its end,
+    # which hands back the markers themselves as though they were changes.
+    if (($to - $from) -gt 1) {
+        $serverDirty = $lines[($from + 1)..($to - 1)] | Where-Object { $_.Trim() }
+    } else {
+        $serverDirty = @()
+    }
     if ($serverDirty) {
         Die "the server's tree is dirty - same commit, different code:`n  $($serverDirty -join "`n  ")"
     }
