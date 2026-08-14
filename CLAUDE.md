@@ -120,11 +120,11 @@ upload_date, url, url_ts}`. `qs search` JSON wraps hits with `coverage`
 Errors: `{"error": msg}` on stderr, exit 1 (2 for usage).
 
 **The `/api/qs/*` endpoints on :7861 are the primary interface, not a
-mirror.** They cover `status`, `search`, `context`, `pull`, `cut`, `warm`,
-`discard` and `server`, work identically whether the corpus is local or
-remote, and — unlike the CLI — put the resulting clip in *this* machine's
-library. Reach for the CLI only for corpus maintenance (`ingest`, `index`,
-`embed`, `transcribe`) and for `words`, which has no endpoint yet.
+mirror.** They cover `status`, `search`, `words`, `context`, `pull`, `cut`,
+`warm`, `discard` and `server`, work identically whether the corpus is local
+or remote, and — unlike the CLI — put the resulting clip in *this* machine's
+library. Reach for the CLI only for corpus maintenance: `ingest`, `index`,
+`embed`, `transcribe`.
 
 ## Investigation patterns
 
@@ -253,6 +253,25 @@ with its `.words.json` manifest, registers it locally with attribution and
 palette, then tells the server to discard its copy. Poll `stage` to follow
 along; `item` holds the finished library entry. A 410 while polling means
 the server restarted and the job is gone — start it again.
+
+### Clips headed for the video pipeline
+
+A cut is born on the machine that also runs the video model, so a clip
+destined for generation would otherwise travel to the desktop and back to
+move four directories. `--outbox` drops a copy in a staging folder on the
+server as the clip is written:
+
+```bash
+qs cut <ep> --range a b --outbox ~/narration-outbox     # on the server
+export QS_OUTBOX=~/narration-outbox                     # or set it once
+```
+
+Same field in the API body: `{"outbox": "~/narration-outbox"}`.
+
+Off unless asked, and deliberately **not** the generator's own input
+folder — that fills with everything a pipeline is fed and stops being
+curatable. This is a tray you copy *from*. The discard step only touches
+the server's `media/`, so an outbox copy survives the hand-off.
 
 Why step 2 matters: `qs cut` ends where you tell it. It will extend only
 `QS_CUT_EXTEND_MS` (300 ms) looking for a pause, then stop and fade. Pick

@@ -315,11 +315,21 @@ hopeless for scrubbing 1080p video. The media library is gigabytes of video
 reviewed by eye, so it belongs on the machine with the eyes. Moving it here
 would trade a real problem for a worse one.
 
-What *is* true is narrower and worth acting on: **a cut clip has two
+What *is* true is narrower, and `--outbox` acts on it: **a cut clip has two
 consumers on two machines.** You review it in palette on the desktop, and
 the video pipeline reads it here — so a clip born four directories from
-`ComfyUI/input` currently makes a round trip to get back. At 200 KB that is
-friction rather than a wall, but the trip is avoidable: a cut can be written
-to a pipeline outbox here *and* handed to the desktop library, since the
-discard exists to keep this machine's *palette library* clean, which is a
-different concern from where the pipeline reads its input.
+`ComfyUI/input` would otherwise make a round trip to get back. At 200 KB
+that is friction rather than a wall, but the trip is avoidable.
+
+```bash
+export QS_OUTBOX=~/narration-outbox     # or --outbox per run
+```
+
+The clip and its manifest are copied there as they are written, before the
+staging branch — so it works for exactly the case it exists for, where the
+desktop adopts the clip and this machine discards its own copy. Discard only
+touches `media/`, so the outbox copy survives.
+
+A staging folder rather than `ComfyUI/input` directly: the generator's input
+folder accumulates everything a pipeline is ever fed, and a tray you copy
+*from* stays curatable. Off unless configured.

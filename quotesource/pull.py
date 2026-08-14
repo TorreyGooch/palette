@@ -193,7 +193,7 @@ async def _fetch_rss_audio(audio_url: str, start: float, end: float,
 def pull(episode_id: str, start: float, end: float, mode: str = "av",
          palette_name: str | None = None, person: str | None = None,
          pad: float = 0.0, rough: bool = False, progress_cb=None,
-         stage: bool = True) -> dict:
+         stage: bool = True, outbox: str | None = None) -> dict:
     """Snap, fetch, stage. Returns staged item JSON (with attribution).
     progress_cb, if given, receives stage strings as work proceeds.
 
@@ -265,6 +265,14 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
     except Exception:
         pass
 
+    # Before the staging branch: a clip pulled for the video pipeline is
+    # often one the remote caller adopts and this library discards.
+    from .outbox import deliver as deliver_to_outbox
+
+    delivered = deliver_to_outbox([dest], outbox)
+    if delivered:
+        _progress(f"delivered to outbox ({len(delivered)} files)")
+
     _progress("registering in library" if stage else "preparing hand-off")
     quote_short = snapped["quote_text"][:70].rstrip()
     title = f'“{quote_short}…” — {meta.get("title", episode_id)[:60]}'
@@ -293,7 +301,7 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
         # case, but nothing is written to this library.
         return {"filename": filename, "path": str(dest), "title": title,
                 "url": _ts_url(url, s), "attribution": attribution,
-                "tags": tags, "staged": False}
+                "tags": tags, "staged": False, "outbox": delivered}
 
     item = asyncio.run(register_media_file(lib_root, filename, title))
 

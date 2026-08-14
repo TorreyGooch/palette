@@ -29,14 +29,29 @@ app_pid() {
   done | head -1
 }
 
+# uvicorn binds one address, so serving loopback as well as the tailnet
+# would mean 0.0.0.0 - which also exposes the LAN, on an app with no
+# authentication. Publishing the resolved address instead costs nothing and
+# removes the actual hazard: local scripts hardcoding an IP that changes if
+# the node is ever re-added to the tailnet.
+#   API=$(cat ~/.palette-api-url)
+URLFILE="${PALETTE_URL_FILE:-$HOME/.palette-api-url}"
+
+publish_url() {
+  local ip
+  ip=$(tailscale ip -4 2>/dev/null | head -1)
+  [ -z "$ip" ] && ip="127.0.0.1"
+  printf 'http://%s:%s\n' "$ip" "$PORT" > "$URLFILE"
+}
+
 start_app() {
-  if listening; then echo "already running on $PORT" >&2; return 0; fi
+  if listening; then publish_url; echo "already running on $PORT" >&2; return 0; fi
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   tmux new-session -d -s "$SESSION" \
     "source '$ENVFILE' 2>/dev/null; cd '$REPO' && PALETTE_API_ONLY=1 \
      PALETTE_HOST=tailscale PALETTE_PORT=$PORT '$PY' run.py > '$LOG' 2>&1"
   for _ in $(seq 1 40); do
-    listening && { echo "started on $PORT" >&2; return 0; }
+    listening && { publish_url; echo "started on $PORT ($(cat "$URLFILE"))" >&2; return 0; }
     sleep 0.5
   done
   echo "did not come up within 20s; see $LOG" >&2

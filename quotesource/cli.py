@@ -217,6 +217,7 @@ def cmd_cut(args):
     res = cut_quote(args.episode_id, args.range[0], args.range[1],
                     palette_name=args.palette, person=args.person,
                     model_size=args.model, stage=not args.no_stage,
+                    outbox=args.outbox,
                     progress_cb=(None if args.quiet else
                                  lambda m: print(f"  {m}…", flush=True)))
     if args.pretty:
@@ -241,7 +242,8 @@ def cmd_pull(args):
 
     item = pull(args.episode_id, args.range[0], args.range[1],
                 mode=args.mode, palette_name=args.palette,
-                person=args.person, pad=args.pad, rough=args.rough)
+                person=args.person, pad=args.pad, rough=args.rough,
+                outbox=args.outbox)
     _out(item, args.pretty)
 
 
@@ -408,6 +410,8 @@ def main(argv=None):
     p.add_argument("--pad", type=float, default=0.0, help="extra seconds each side after snapping")
     p.add_argument("--rough", action="store_true",
                    help="fast stream-copy: keyframe-aligned ~10s padding, original quality, trim downstream")
+    p.add_argument("--outbox", default=None,
+                   help="also copy the clip to this staging folder (default: $QS_OUTBOX, off if unset)")
     p.set_defaults(func=cmd_pull)
 
     p = sub.add_parser("words", help="word timings + pauses for a region (pick cut boundaries with this)",
@@ -426,6 +430,9 @@ def main(argv=None):
     p.add_argument("--person")
     p.add_argument("--model", help="whisper model for the window (default: env/auto)")
     p.add_argument("--no-stage", action="store_true", help="write clip + manifest without adding to library")
+    p.add_argument("--outbox", default=None,
+                   help="also copy clip + manifest to this staging folder "
+                        "(default: $QS_OUTBOX, off if unset)")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_cut)
 

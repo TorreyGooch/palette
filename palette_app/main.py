@@ -725,6 +725,7 @@ def qs_pull(body: dict = Body(...)):
                 rough=bool(body.get("rough", False)),
                 progress_cb=lambda stage: job.__setitem__("stage", stage),
                 stage=bool(body.get("stage", True)),
+                outbox=body.get("outbox") or None,
             )
             job["stage"] = "done"
         except Exception as e:
@@ -882,6 +883,7 @@ def qs_cut(body: dict = Body(...)):
                 model_size=body.get("model") or None,
                 progress_cb=lambda stage: job.__setitem__("stage", stage),
                 stage=bool(body.get("stage", True)),
+                outbox=body.get("outbox") or None,
             )
             job["item"] = {"title": res["filename"], **res}
             job["stage"] = "done"

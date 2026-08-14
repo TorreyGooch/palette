@@ -353,13 +353,19 @@ def _match_quote_region(words: list[dict], want_start: float,
 def cut_quote(episode_id: str, start: float, end: float,
               palette_name: str | None = None, person: str | None = None,
               model_size: str | None = None, stage: bool = True,
-              progress_cb=None) -> dict:
-    """Whisper a window, snap to the waveform, cut, manifest, stage."""
+              progress_cb=None, outbox: str | None = None) -> dict:
+    """Whisper a window, snap to the waveform, cut, manifest, stage.
+
+    outbox: also drop the clip and its manifest in a staging folder for the
+    next tool in the pipeline. Off unless given or QS_OUTBOX is set.
+    """
     from palette_app.config import get_library_path
     from palette_app.library import (
         ensure_library, load_library, save_library, new_palette,
         register_media_file,
     )
+
+    from .outbox import deliver as deliver_to_outbox
 
     def _progress(msg):
         if progress_cb:
@@ -485,6 +491,14 @@ def cut_quote(episode_id: str, start: float, end: float,
 
     result = {"filename": filename, "path": str(dest),
               "manifest": str(manifest_path), **manifest}
+
+    # Before the staging branch on purpose: a clip cut for the video pipeline
+    # is usually one the remote caller adopts and this library discards, so
+    # tying delivery to staging would skip exactly the case it exists for.
+    delivered = deliver_to_outbox([dest, manifest_path], outbox)
+    if delivered:
+        result["outbox"] = delivered
+        _progress(f"delivered to outbox ({len(delivered)} files)")
 
     if not stage:
         return result
