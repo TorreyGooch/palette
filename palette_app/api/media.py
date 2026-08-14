@@ -98,6 +98,20 @@ async def extract_clip(source: Path, dest: Path, start: float, end: float) -> bo
 
 # ── Contact sheet ─────────────────────────────────────────────────────────────
 
+def fmt_timecode(seconds: float) -> str:
+    """m:ss.s, or h:mm:ss.s past the hour. Short enough to burn into a tile."""
+    if seconds >= 3600:
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        return f"{h}:{m:02d}:{seconds % 60:04.1f}"
+    return f"{int(seconds // 60)}:{seconds % 60:04.1f}"
+
+
+def page_paths(out_path: Path, page: int) -> Path:
+    """Sheet 3 of a series named .../foo_sheet_2026.jpg → .../foo_sheet_2026_p003.jpg."""
+    return out_path.with_name(f"{out_path.stem}_p{page:03d}{out_path.suffix}")
+
+
 async def contact_sheet(
     video_path: Path,
     out_path: Path,
@@ -110,9 +124,22 @@ async def contact_sheet(
     max_width: Optional[int] = None,
     start: Optional[float] = None,
     end: Optional[float] = None,
+    rows: Optional[int] = None,   # tiles per sheet = cols*rows; None → one tall sheet
+    fps: Optional[float] = None,  # lets labels and the index carry real timecodes
 ) -> dict:
-    """Extract every Nth frame, compose into a grid image. Returns metadata."""
+    """Extract every Nth frame and compose it into one grid image, or into a
+    series of them when `rows` is set.
+
+    A whole video at one sample per second is thousands of tiles. As a single
+    image that is unreadable and, past Pillow's limits, unopenable; paged into
+    cols×rows sheets it stays legible and each sheet is small enough to hand to
+    a model. Sampling is identical either way — paging only decides where the
+    grid breaks, so tile k lands on the same source frame whatever `rows` is.
+    """
     from PIL import Image, ImageDraw, ImageFont
+
+    ncols = max(1, cols)
+    per_sheet = ncols * rows if rows and rows > 0 else None
 
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
@@ -137,58 +164,99 @@ async def contact_sheet(
 
         loop = asyncio.get_event_loop()
 
-        def _compose():
-            imgs = [Image.open(f) for f in frames]
-            tw = imgs[0].width
-            th = max(i.height for i in imgs)
-            n = len(imgs)
-            ncols = max(1, cols)
-            nrows = math.ceil(n / ncols)
+        # Frame numbers and times are absolute in the source, not relative to
+        # the page or to `start` — a label is only useful if you can seek to it.
+        t0 = start or 0.0
+        base_frame = int(round(t0 * fps)) if fps else 0
 
-            sheet_w = ncols * tw + (ncols + 1) * padding
-            sheet_h = nrows * th + (nrows + 1) * padding
-            sheet = Image.new("RGB", (sheet_w, sheet_h), (16, 16, 16))
-            draw = ImageDraw.Draw(sheet)
+        def _time_of(global_idx: int) -> Optional[float]:
+            return t0 + (global_idx * every_n) / fps if fps else None
+
+        def _compose_page(page_frames: list, dest: Path, first_idx: int) -> dict:
+            imgs = [Image.open(f) for f in page_frames]
             try:
-                font = ImageFont.truetype("arial.ttf", max(12, tw // 20))
-            except Exception:
-                font = ImageFont.load_default()
+                tw = imgs[0].width
+                th = max(i.height for i in imgs)
+                n = len(imgs)
+                nrows = math.ceil(n / ncols)
 
-            for idx, img in enumerate(imgs):
-                if order == "cols":
-                    col = idx // nrows
-                    row = idx % nrows
-                else:
-                    row = idx // ncols
-                    col = idx % ncols
-                x = padding + col * (tw + padding)
-                y = padding + row * (th + padding)
-                sheet.paste(img, (x, y))
-                if labels:
-                    frame_no = idx * every_n
-                    text = f"{frame_no}"
-                    tx, ty = x + 4, y + 4
-                    # simple outline for readability
-                    for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                        draw.text((tx + dx, ty + dy), text, fill=(0, 0, 0), font=font)
-                    draw.text((tx, ty), text, fill=(255, 255, 80), font=font)
+                sheet_w = ncols * tw + (ncols + 1) * padding
+                sheet_h = nrows * th + (nrows + 1) * padding
+                sheet = Image.new("RGB", (sheet_w, sheet_h), (16, 16, 16))
+                draw = ImageDraw.Draw(sheet)
+                try:
+                    font = ImageFont.truetype("arial.ttf", max(12, tw // 20))
+                except Exception:
+                    font = ImageFont.load_default()
 
-            if max_width and sheet.width > max_width:
-                ratio = max_width / sheet.width
-                sheet = sheet.resize(
-                    (max_width, int(sheet.height * ratio)), Image.LANCZOS
-                )
+                for idx, img in enumerate(imgs):
+                    if order == "cols":
+                        col = idx // nrows
+                        row = idx % nrows
+                    else:
+                        row = idx // ncols
+                        col = idx % ncols
+                    x = padding + col * (tw + padding)
+                    y = padding + row * (th + padding)
+                    sheet.paste(img, (x, y))
+                    if labels:
+                        g = first_idx + idx
+                        text = f"{base_frame + g * every_n}"
+                        at = _time_of(g)
+                        if at is not None:
+                            text += f"  {fmt_timecode(at)}"
+                        tx, ty = x + 4, y + 4
+                        # simple outline for readability
+                        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                            draw.text((tx + dx, ty + dy), text, fill=(0, 0, 0), font=font)
+                        draw.text((tx, ty), text, fill=(255, 255, 80), font=font)
 
-            sheet.save(out_path, quality=92)
+                if max_width and sheet.width > max_width:
+                    ratio = max_width / sheet.width
+                    sheet = sheet.resize(
+                        (max_width, int(sheet.height * ratio)), Image.LANCZOS
+                    )
+
+                sheet.save(dest, quality=92)
+                last = first_idx + n - 1
+                return {
+                    "filename": dest.name,
+                    "frames": n,
+                    "grid": f"{ncols}x{nrows}",
+                    "width": sheet.width,
+                    "height": sheet.height,
+                    "first_frame": base_frame + first_idx * every_n,
+                    "last_frame": base_frame + last * every_n,
+                    "start_time": _time_of(first_idx),
+                    "end_time": _time_of(last),
+                }
+            finally:
+                for i in imgs:
+                    i.close()
+
+        def _compose_all():
+            # Only one page's worth of images is ever open at a time, which is
+            # what makes a two-hour source survivable.
+            size = per_sheet or len(frames)
+            pages = [frames[i:i + size] for i in range(0, len(frames), size)]
+            sheets = []
+            for p, chunk in enumerate(pages, start=1):
+                dest = out_path if per_sheet is None else page_paths(out_path, p)
+                sheets.append({"page": p, **_compose_page(chunk, dest, (p - 1) * size)})
+            first = sheets[0]
             return {
                 "ok": True,
-                "frames": n,
-                "grid": f"{ncols}x{nrows}",
-                "width": sheet.width,
-                "height": sheet.height,
+                "frames": len(frames),
+                "sheets": sheets,
+                "sheet_count": len(sheets),
+                # First sheet's shape, kept flat so single-sheet callers that
+                # predate paging read the same fields they always did.
+                "grid": first["grid"],
+                "width": first["width"],
+                "height": first["height"],
             }
 
-        return await loop.run_in_executor(None, _compose)
+        return await loop.run_in_executor(None, _compose_all)
 
 
 # ── Video export ──────────────────────────────────────────────────────────────

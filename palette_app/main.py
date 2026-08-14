@@ -406,25 +406,84 @@ async def export_contact_sheet(body: dict = Body(...)):
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base = Path(item["filename"]).stem
-    out_name = f"{base}_sheet_{stamp}.jpg"
-    out_path = root / "exports" / out_name
+
+    every_n = int(body.get("every_n", 30))
+    cols = int(body.get("cols", 4))
+    rows = int(body["rows"]) if body.get("rows") not in (None, "", 0, "0") else None
+    start = float(body["start"]) if body.get("start") not in (None, "") else None
+    end = float(body["end"]) if body.get("end") not in (None, "") else None
+
+    # A series is forty files that belong together, so it gets a folder you can
+    # hand over whole. A single sheet is one file and a folder would just be a
+    # box around it, so it stays loose in exports/ as it always has.
+    if rows:
+        # The stamp only resolves to the second. Two renders inside one second
+        # would otherwise share a folder, and since a shorter run writes fewer
+        # pages the loser keeps the winner's leftover sheets — a folder holding
+        # two different renders, with an index describing only one of them.
+        series_dir = root / "exports" / f"{base}_sheet_{stamp}"
+        n = 2
+        while series_dir.exists():
+            series_dir = root / "exports" / f"{base}_sheet_{stamp}_{n}"
+            n += 1
+        series_dir.mkdir(parents=True)
+        out_path = series_dir / "sheet.jpg"
+    else:
+        series_dir = None
+        out_path = root / "exports" / f"{base}_sheet_{stamp}.jpg"
 
     result = await contact_sheet(
         root / "media" / item["filename"],
         out_path,
-        every_n=int(body.get("every_n", 30)),
-        cols=int(body.get("cols", 4)),
+        every_n=every_n,
+        cols=cols,
         tile_width=int(body.get("tile_width", 320)),
         padding=int(body.get("padding", 8)),
         order=body.get("order", "rows"),
         labels=bool(body.get("labels", False)),
         max_width=int(body["max_width"]) if body.get("max_width") else None,
-        start=float(body["start"]) if body.get("start") not in (None, "") else None,
-        end=float(body["end"]) if body.get("end") not in (None, "") else None,
+        start=start,
+        end=end,
+        rows=rows,
+        fps=item.get("fps"),
     )
     if not result.get("ok"):
         raise HTTPException(500, f"Contact sheet failed: {result.get('error', 'unknown')}")
-    return {**result, "filename": out_name}
+
+    sheets = result.get("sheets", [])
+
+    # A series without an index is a pile of JPEGs. Write one so the session
+    # reading the sheets knows what it is looking at and where in the video.
+    # Its sheet names stay bare, relative to the folder that holds them, so the
+    # folder survives being renamed or moved somewhere else entirely.
+    index_name = None
+    if series_dir is not None:
+        (series_dir / "index.json").write_text(json.dumps({
+            "source": item["filename"],
+            "title": item.get("title"),
+            "duration": item.get("duration"),
+            "fps": item.get("fps"),
+            "sampled": {"every_n": every_n, "start": start, "end": end},
+            "layout": {"cols": cols, "rows": rows,
+                       "order": body.get("order", "rows"),
+                       "labels": bool(body.get("labels", False))},
+            "frames": result.get("frames"),
+            "sheets": sheets,
+        }, indent=2), encoding="utf-8")
+        index_name = f"{series_dir.name}/index.json"
+
+    # URLs are relative to exports/; the series folder is part of the path.
+    prefix = f"{series_dir.name}/" if series_dir is not None else ""
+    names = [f"{prefix}{s['filename']}" for s in sheets]
+
+    return {**result,
+            "sheets": [{**s, "url": f"{prefix}{s['filename']}"} for s in sheets],
+            "filename": names[0] if names else out_path.name,
+            "filenames": names,
+            "index": index_name,
+            "dir": series_dir.name if series_dir is not None else None,
+            # The whole point of the folder: a path to hand to another session.
+            "dir_path": str(series_dir) if series_dir is not None else None}
 
 
 @app.post("/api/export/video")
@@ -950,22 +1009,39 @@ def qs_warm(body: dict = Body(...)):
 
 @app.get("/api/exports")
 def list_exports():
+    """One entry per export. A sheet series is a folder and counts as one —
+    forty rows for a single render would bury the rest of the history."""
     root = _root()
-    files = sorted(
-        (root / "exports").iterdir(),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return [
-        {"filename": f.name, "size_bytes": f.stat().st_size}
-        for f in files if f.is_file()
-    ]
+    entries = []
+    for p in (root / "exports").iterdir():
+        if p.is_file():
+            entries.append({"kind": "file", "filename": p.name,
+                            "size_bytes": p.stat().st_size,
+                            "mtime": p.stat().st_mtime})
+        elif p.is_dir():
+            sheets = sorted(p.glob("*.jpg"))
+            if not sheets:
+                continue
+            entries.append({
+                "kind": "series",
+                "filename": p.name,
+                "sheets": len(sheets),
+                "size_bytes": sum(f.stat().st_size for f in p.iterdir() if f.is_file()),
+                "mtime": p.stat().st_mtime,
+                "index": f"{p.name}/index.json" if (p / "index.json").exists() else None,
+                "first": f"{p.name}/{sheets[0].name}",
+                "path": str(p),
+            })
+    entries.sort(key=lambda e: e["mtime"], reverse=True)
+    return entries
 
 
 @app.get("/api/exports/{filename:path}")
 def serve_export(filename: str):
     root = _root()
-    path = root / "exports" / filename
-    if not path.exists():
+    exports = (root / "exports").resolve()
+    # filename is now a path with a folder in it, so ../ has somewhere to go.
+    path = (exports / filename).resolve()
+    if not path.is_relative_to(exports) or not path.is_file():
         raise HTTPException(404)
     return FileResponse(str(path))

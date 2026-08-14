@@ -5,7 +5,8 @@ Two things live in this repo:
 1. **palette** — web app (`launch.bat`, http://127.0.0.1:7861) for a visual
    reference library: import images/video, carve clips (keyframe workflow),
    tag items, group them into *palettes* (named collections, many-to-many),
-   export contact sheets / trimmed videos for diffusion workflows. Data lives
+   export contact sheets (single, or a paged series covering a whole video)
+   and trimmed videos for diffusion workflows. Data lives
    in a user-chosen library folder (`config.json` → `library_path`);
    `library.json` inside it is the whole database.
 2. **quotesource (`qs`)** — spoken-word sourcing layer. Maintains a corpus of
@@ -361,3 +362,61 @@ downstream contract — it is what lets visual beats land on specific words.
 the audio file. `attribution.range` is the only field in episode time.
 Every word listed is fully present in the audio; partial words at the
 edges are dropped rather than reported with times that run past the end.
+
+## Looking at a whole video as contact sheets
+
+Export → Contact Sheet samples every Nth frame into a grid. Leave **rows
+per sheet** blank and you get the old behaviour, one sheet however tall it
+needs to be. Set it and the same sampling is paged into a series, which is
+how you hand a full video to a session for visual or cinematic analysis.
+Sampling does not change when you page: tile *k* is the same source frame
+either way, so rows only decides where the grid breaks.
+
+Renders land on disk under the library's `exports/`; nothing is downloaded
+through the browser. A series gets **its own folder** so it can be handed
+over whole — the result panel and the history row both offer its path:
+
+```
+exports/<clip>_sheet_<stamp>/     # ← the thing to point a session at
+    index.json
+    sheet_p001.jpg
+    sheet_p002.jpg
+    ...
+```
+
+A single sheet is one file and stays loose in `exports/`. If two series are
+rendered inside the same second the later one gets `_2` appended rather
+than merging into the first folder.
+
+```jsonc
+// POST /api/export/contact-sheet
+{"item_id": "...", "every_n": 24, "cols": 4, "rows": 6,
+ "tile_width": 320, "padding": 8, "order": "rows", "labels": true,
+ "max_width": 2048, "start": null, "end": null}
+```
+
+Response carries `dir` / `dir_path` (the series folder, null for a single
+sheet), `filenames` (every sheet, in order, relative to `exports/`),
+`index`, `frames`, `sheet_count`, and a `sheets[]` entry per page with
+`grid`, `width`, `height`, `first_frame` / `last_frame` and `start_time` /
+`end_time`.
+
+A series writes `index.json` into its own folder — source, fps, duration,
+the sampling and layout used, and the same per-sheet ranges. **Read the
+index first.** It is the only thing that says which seconds of the video a
+given sheet covers; the JPEGs alone can't tell you. Sheet names inside it
+are bare (`sheet_p001.jpg`), relative to the folder holding them, so the
+folder survives being renamed or moved somewhere else entirely.
+
+`labels: true` burns the absolute source frame number and timecode into
+each tile (`1440  1:00.1`). Absolute, not per-sheet and not relative to
+`start` — a label is only useful if you can seek to it. Without labels a
+sheet is prettier; with them you can name a moment precisely, which is
+usually what the analysis is for.
+
+**Picking the numbers.** `every_n` is in frames, so at 24 fps `every_n: 24`
+is one tile per second; the estimate under the button turns your settings
+into tiles, sheets and seconds-per-sheet before you commit. Aim for sheets
+that stay legible — 4×6 at 320 px is ~1.3 k × 1.1 k and around 100–200 KB,
+which reads well and costs little to attach. A five-minute video at one
+tile per 2.5 s is about a dozen sheets.
