@@ -211,6 +211,20 @@ def cmd_words(args):
         _out(res, False)
 
 
+def _keep_working_copy(args) -> bool:
+    """Whether an unstaged clip should stay in the library's media/ folder.
+
+    Only the CLI can answer this: a remote job leaves the files there
+    precisely so the caller can download them, and cleans up afterwards.
+    Here the clip is already in the outbox and nothing else will ever come
+    looking, so a second copy is just litter — unless there is no outbox, in
+    which case media/ holds the only copy and must be left alone.
+    """
+    from .outbox import outbox_dir
+
+    return not (args.no_stage and outbox_dir(args.outbox) is not None)
+
+
 def cmd_cut(args):
     from .cut import cut_quote
 
@@ -218,6 +232,7 @@ def cmd_cut(args):
                     palette_name=args.palette, person=args.person,
                     model_size=args.model, stage=not args.no_stage,
                     outbox=args.outbox,
+                    keep_working_copy=_keep_working_copy(args),
                     progress_cb=(None if args.quiet else
                                  lambda m: print(f"  {m}…", flush=True)))
     if args.pretty:

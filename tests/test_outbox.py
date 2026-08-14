@@ -125,3 +125,67 @@ def test_both_producers_accept_an_outbox(func_name, module):
     params = inspect.signature(func).parameters
     assert "outbox" in params
     assert params["outbox"].default is None, "must be off unless asked"
+
+
+@pytest.mark.parametrize("func_name,module", [
+    ("cut_quote", "quotesource.cut"),
+    ("pull", "quotesource.pull"),
+])
+def test_keeping_the_working_copy_is_the_default(func_name, module):
+    """A remote caller has yet to download it; dropping it early loses it."""
+    import importlib
+    import inspect
+
+    func = getattr(importlib.import_module(module), func_name)
+    assert inspect.signature(func).parameters["keep_working_copy"].default is True
+
+
+# ── who cleans up the unstaged working copy ───────────────────────────────────
+
+class Args:
+    def __init__(self, no_stage, outbox):
+        self.no_stage = no_stage
+        self.outbox = outbox
+
+
+def test_unstaged_with_an_outbox_drops_the_duplicate(monkeypatch, tmp_path):
+    from quotesource.cli import _keep_working_copy
+
+    monkeypatch.delenv("QS_OUTBOX", raising=False)
+    assert _keep_working_copy(Args(True, str(tmp_path / "out"))) is False
+
+
+def test_unstaged_without_an_outbox_keeps_the_only_copy(monkeypatch):
+    """The case that must never clean up: media/ holds the sole output."""
+    from quotesource.cli import _keep_working_copy
+
+    monkeypatch.delenv("QS_OUTBOX", raising=False)
+    assert _keep_working_copy(Args(True, None)) is True
+
+
+def test_env_outbox_counts_too(monkeypatch, tmp_path):
+    from quotesource.cli import _keep_working_copy
+
+    monkeypatch.setenv("QS_OUTBOX", str(tmp_path / "out"))
+    assert _keep_working_copy(Args(True, None)) is False
+
+
+def test_staged_runs_always_keep_it(monkeypatch, tmp_path):
+    """Staged means the library references the file; never remove it."""
+    from quotesource.cli import _keep_working_copy
+
+    monkeypatch.setenv("QS_OUTBOX", str(tmp_path / "out"))
+    assert _keep_working_copy(Args(False, None)) is True
+    assert _keep_working_copy(Args(False, str(tmp_path / "out"))) is True
+
+
+def test_cleanup_needs_a_delivery_not_just_a_setting(tmp_path):
+    """keep_working_copy=False alone must not delete anything: the guard is
+    that the clip actually landed in the outbox."""
+    import inspect
+
+    from quotesource import cut
+
+    src = inspect.getsource(cut.cut_quote)
+    assert "not keep_working_copy and delivered" in src, (
+        "cleanup must be conditional on a successful delivery")

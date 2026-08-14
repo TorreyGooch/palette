@@ -353,11 +353,17 @@ def _match_quote_region(words: list[dict], want_start: float,
 def cut_quote(episode_id: str, start: float, end: float,
               palette_name: str | None = None, person: str | None = None,
               model_size: str | None = None, stage: bool = True,
-              progress_cb=None, outbox: str | None = None) -> dict:
+              progress_cb=None, outbox: str | None = None,
+              keep_working_copy: bool = True) -> dict:
     """Whisper a window, snap to the waveform, cut, manifest, stage.
 
     outbox: also drop the clip and its manifest in a staging folder for the
     next tool in the pipeline. Off unless given or QS_OUTBOX is set.
+
+    keep_working_copy: with stage=False, whether to leave the files in the
+    library's media/ folder. A remote caller has yet to download them, so
+    the default keeps them; a local caller that asked for an outbox already
+    has the clip and can drop the duplicate.
     """
     from palette_app.config import get_library_path
     from palette_app.library import (
@@ -501,6 +507,15 @@ def cut_quote(episode_id: str, start: float, end: float,
         _progress(f"delivered to outbox ({len(delivered)} files)")
 
     if not stage:
+        # Unstaged files sit in media/ with nothing referencing them. A
+        # remote caller still has to download them, so they stay by default
+        # and /api/qs/discard removes them afterwards. A local caller that
+        # already has the clip in an outbox does not need a second copy —
+        # but only clean up when there *is* one, or this deletes the output.
+        if not keep_working_copy and delivered:
+            for path in (dest, manifest_path):
+                path.unlink(missing_ok=True)
+            result["working_copy_removed"] = True
         return result
 
     _progress("staging")

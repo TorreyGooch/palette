@@ -193,7 +193,8 @@ async def _fetch_rss_audio(audio_url: str, start: float, end: float,
 def pull(episode_id: str, start: float, end: float, mode: str = "av",
          palette_name: str | None = None, person: str | None = None,
          pad: float = 0.0, rough: bool = False, progress_cb=None,
-         stage: bool = True, outbox: str | None = None) -> dict:
+         stage: bool = True, outbox: str | None = None,
+         keep_working_copy: bool = True) -> dict:
     """Snap, fetch, stage. Returns staged item JSON (with attribution).
     progress_cb, if given, receives stage strings as work proceeds.
 
@@ -299,9 +300,16 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
     if not stage:
         # Shaped like a library item so an adopting caller needs no special
         # case, but nothing is written to this library.
-        return {"filename": filename, "path": str(dest), "title": title,
-                "url": _ts_url(url, s), "attribution": attribution,
-                "tags": tags, "staged": False, "outbox": delivered}
+        result = {"filename": filename, "path": str(dest), "title": title,
+                  "url": _ts_url(url, s), "attribution": attribution,
+                  "tags": tags, "staged": False, "outbox": delivered}
+        # See cut_quote: unstaged files sit in media/ unreferenced. A remote
+        # caller still has to fetch them, so keep by default; only drop the
+        # duplicate when an outbox already holds the clip.
+        if not keep_working_copy and delivered:
+            dest.unlink(missing_ok=True)
+            result["working_copy_removed"] = True
+        return result
 
     item = asyncio.run(register_media_file(lib_root, filename, title))
 
