@@ -34,8 +34,12 @@ Budget, measured on a 1,637-episode / 2,518-hour corpus:
 |---|---|---|
 | transcripts + metadata | ~2.5 GB per 1,000 episodes | irreplaceable, back this up |
 | index + embeddings | ~1.9 GB | regenerates in minutes on the GPU |
-| kept episode audio | ~32 MB each, **~52 GB for everything** | ceiling `QS_AUDIO_STORE_GB` (40) |
+| kept episode audio | ~32 MB per YouTube pull, ~50 MB per podcast enclosure | ceiling `QS_AUDIO_STORE_GB` (80) |
 | video cache | `QS_PULL_CACHE_GB` (4) | evictable luxury |
+
+Archiving a podcast feed is the case that moves this number: 320 episodes of
+Thoughtforms + Dwarkesh is ~16 GB in one sitting, and a few more feeds would
+have blown through the old 40 GB ceiling — silently, oldest-touched first.
 
 Audio is kept rather than cached because an eviction costs a fresh
 full-episode download the next time anyone cuts from that episode — the
@@ -142,7 +146,8 @@ nights. Run it with `--limit` per night if you want the box free by day.
 
 Env knobs: `QS_WHISPER_MODEL` (default large-v3 on GPU), `QS_WHISPER_DEVICE`,
 `QS_WHISPER_COMPUTE`, `QS_DISK_FLOOR_GB` (default 20), `QS_EMBED_MODEL`,
-`QS_PULL_MAX_HEIGHT` (default 720), `QS_PULL_CACHE_GB` (default 6).
+`QS_PULL_MAX_HEIGHT` (default 720), `QS_PULL_CACHE_GB` (default 4),
+`QS_AUDIO_STORE_GB` (default 80).
 
 ## Moving an existing setup to the server
 

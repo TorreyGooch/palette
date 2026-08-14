@@ -114,12 +114,17 @@ def estimate_mb(duration_s: float | None, mode: str) -> float | None:
 
 
 def _audio_store_gb() -> float:
-    """Ceiling for kept episode audio. ~32 MB an episode at the capped
-    bitrate, so 40 GB is around 1,250 episodes — past anything likely, but a
-    number that fails loudly rather than quietly eating a shared disk."""
+    """Ceiling for kept episode audio.
+
+    A YouTube pull caps its own bitrate and lands around 32 MB an episode. A
+    podcast enclosure is whatever the publisher shipped — ~50 MB at 128 kbps,
+    and archiving a back catalogue means hundreds at once, so the old 40 GB
+    was reachable in a single afternoon. 80 GB is roughly 1,600 podcast
+    episodes; still a number that fails loudly rather than quietly eating a
+    shared disk."""
     import os
 
-    return float(os.environ.get("QS_AUDIO_STORE_GB", "40"))
+    return float(os.environ.get("QS_AUDIO_STORE_GB", "80"))
 
 
 def stored_audio(ep_dir: Path) -> Path | None:

@@ -38,8 +38,10 @@ def test_missing_episode_dir_is_survivable():
 # ── budgets are separate ──────────────────────────────────────────────────────
 
 def test_audio_ceiling_is_generous_by_default(monkeypatch):
+    """Sized for archiving podcast back catalogues, not just incidental pulls:
+    a feed's worth of ~50 MB enclosures runs past the old 40 GB in one go."""
     monkeypatch.delenv("QS_AUDIO_STORE_GB", raising=False)
-    assert pull._audio_store_gb() == 40
+    assert pull._audio_store_gb() == 80
 
 
 def test_video_cache_is_small_by_default(monkeypatch):

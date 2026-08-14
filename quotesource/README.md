@@ -81,5 +81,5 @@ ingest/transcribe/embed cron there. Your desktop just opens
 - GPU embeddings: `pip install fastembed-gpu` — auto-detected, ~10-50x the
   CPU rate.
 - Pull cache: full media fetched for pulls is LRU-cached
-  (`QS_PULL_CACHE_GB`, default 6) so repeat pulls from an episode are
+  (`QS_PULL_CACHE_GB`, default 4) so repeat pulls from an episode are
   instant. Video pulls are capped at `QS_PULL_MAX_HEIGHT` (default 720).

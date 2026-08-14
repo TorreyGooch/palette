@@ -210,7 +210,7 @@ flag**:
 - The progress line says what a pull will cost before it spends it, and says
   when the episode is already local and costs nothing.
 - Tunables: `QS_AUDIO_MAX_ABR` (80 kbps ceiling — resolves to ~49 kbps in
-  practice; whisper resamples to 16 kHz anyway), `QS_AUDIO_STORE_GB` (40),
+  practice; whisper resamples to 16 kHz anyway), `QS_AUDIO_STORE_GB` (80),
   `QS_PULL_CACHE_GB` (4, video), `QS_DOWNLOAD_RATE` (e.g. `2M`),
   `QS_DOWNLOAD_SLEEP_S` (1), `QS_PULL_MAX_HEIGHT` (720).
 - If throttling starts: set `QS_DOWNLOAD_RATE=1M` and stop av pulls before
