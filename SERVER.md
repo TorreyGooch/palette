@@ -32,32 +32,49 @@ Budget: transcripts+metadata ~2.5 GB per 1,000 YouTube episodes; whisper
 audio ~25 MB/hour of content (≈15 GB for 600 hours); pull cache capped by
 `QS_PULL_CACHE_GB` (default 6).
 
-## 3. Serve the UI over the tailnet
+## 3. Run the corpus API
 
-`launch-tailnet.bat` (or `PALETTE_HOST=tailscale`) binds **only** this
-machine's Tailscale address, so the app is reachable from your other
-tailnet devices and from nothing else:
+On the GPU box the app runs **headless, on demand, on :7862** — it serves
+the corpus to your desktop, not a UI to you. `server-app.sh` owns its
+lifecycle:
 
+```bash
+./server-app.sh start     # also stop | restart | status
 ```
-launch-tailnet.bat
-```
 
-Windows PowerShell has no inline env-var prefix, so the bash form
-`PALETTE_HOST=tailscale python run.py` is a syntax error there. Use:
+`status` prints JSON, which is what the Start/Stop control on the desktop's
+Quotes page reads over ssh. Start it from there and you never touch this
+script by hand.
+
+On demand rather than a service is deliberate: this box shares memory and
+GPU with generation. Idle it is ~63 MB, but after a search it holds the
+embedding model and a pass over the vectors — about 3.3 GB — until
+`QS_MODEL_IDLE_S` (600s) releases it. Stop it outright before a long
+generation batch.
+
+`PALETTE_API_ONLY=1` makes `/` serve a short explanation instead of the
+app. Two palettes that look identical but hold different libraries is how
+you end up tagging clips into the wrong one.
+
+### Serving the UI from a machine instead
+
+Only relevant if a machine both holds a media library and should serve it
+to other tailnet devices — not the GPU box, whose library is empty by
+design. `launch-tailnet.bat` (or `PALETTE_HOST=tailscale`) binds **only**
+that machine's Tailscale address:
 
 ```powershell
 $env:PALETTE_HOST="tailscale"; python run.py
 ```
 
-cmd.exe: `set PALETTE_HOST=tailscale && python run.py`. On Linux/macOS the
+Windows PowerShell has no inline env-var prefix, so the bash form
+`PALETTE_HOST=tailscale python run.py` is a syntax error there; cmd.exe
+wants `set PALETTE_HOST=tailscale && python run.py`. On Linux/macOS the
 bash form works as written.
 
 `tailscale` resolves via `tailscale ip -4`, falling back to scanning
-interfaces for the 100.64.0.0/10 range Tailscale allocates from. You can
-also pass a literal address (`PALETTE_HOST=100.99.248.49`) or a hostname.
-
-Then browse to `http://<that-100.x-address>:7861`, or use the MagicDNS
-name: `http://<machine-name>:7861`.
+interfaces for the 100.64.0.0/10 range. A literal address
+(`PALETTE_HOST=100.99.248.49`) or hostname also works.
 
 ### Firewall
 
@@ -285,8 +302,24 @@ intact. The browser polls the same endpoints and cannot tell the difference.
 The desktop then needs no corpus at all. Delete any stale local
 `<library>/quotesource/` so there is no question which copy is real.
 
-### One less hop
+### One less hop, and why the library still does not live here
 
-If the GPU box is also the machine running the video model, put the
-library there and the hand-off disappears: `qs cut` writes straight into
-a folder the video pipeline can read, with no copying between machines.
+An earlier version of this file said: if the GPU box also runs the video
+model, put the library there and the hand-off disappears. That advice
+predates the split and no longer applies as written.
+
+The reason is measured, not architectural taste. The link between these two
+machines is **relayed, not direct** — `tailscale ping` reports `via
+DERP(...)` at ~1 MB/s. That is fine for a search query or a 200 KB clip, and
+hopeless for scrubbing 1080p video. The media library is gigabytes of video
+reviewed by eye, so it belongs on the machine with the eyes. Moving it here
+would trade a real problem for a worse one.
+
+What *is* true is narrower and worth acting on: **a cut clip has two
+consumers on two machines.** You review it in palette on the desktop, and
+the video pipeline reads it here — so a clip born four directories from
+`ComfyUI/input` currently makes a round trip to get back. At 200 KB that is
+friction rather than a wall, but the trip is avoidable: a cut can be written
+to a pipeline outbox here *and* handed to the desktop library, since the
+discard exists to keep this machine's *palette library* clean, which is a
+different concern from where the pipeline reads its input.

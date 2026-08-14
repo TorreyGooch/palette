@@ -86,6 +86,12 @@ cd ~/palette && source ~/.palette-env && ./qs <command>
 `LD_LIBRARY_PATH`. Without it, search refuses (model mismatch) rather than
 returning nonsense, and whisper silently drops to CPU.
 
+The `./qs` wrapper finds an interpreter that actually has `faster-whisper`
+rather than trusting `python3` — the system one can import quotesource
+fine, so commands work right up until whisper reports itself "not
+installed" when it is installed in another environment. `QS_PYTHON`
+overrides the search.
+
 | command | purpose |
 |---|---|
 | `qs sources list\|add\|remove` | registry (`sources.yaml` at the data root, hand-editable) |
@@ -231,9 +237,16 @@ curl -s -X POST "$API/cut" -H 'Content-Type: application/json' -d '{
 curl -s "$API/pull/<job_id>"        # same polling endpoint for pull and cut
 ```
 
-There is no `words` endpoint yet, so for step 2 either ssh over and run
-`qs words`, or accept that a boundary guessed from caption timestamps
-usually needs a second attempt.
+Step 2 has an endpoint too — use it, don't guess from caption timestamps:
+
+```bash
+curl -s "$API/words?episode_id=PWasTAtR6Ns&start=477&end=490"
+#   {"words": [... {"word": "you", "start": 487.26, "gap_before": 0.2}],
+#    "pauses": [...]}
+```
+
+Whisper runs on that window only, so it is seconds on the GPU rather than a
+transcription job. Pick an end that already sits just before a real pause.
 
 **What the job does:** the server cuts the clip, your machine downloads it
 with its `.words.json` manifest, registers it locally with attribution and

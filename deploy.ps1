@@ -41,11 +41,20 @@ if (-not $Check -and -not $SkipTests) {
     Ok "suite passed"
 }
 
-# ── 2. push ──────────────────────────────────────────────────────────────────
+# ── 2. working trees ─────────────────────────────────────────────────────────
+# Matching commits are not the same as matching code. A modified file - or
+# just a changed mode bit, which is how server-app.sh drifted after a chmod -
+# means what runs is not what is committed, and HEAD says nothing about it.
+# Checked on both machines and in both modes, since proving that is the
+# entire job of this script.
+Step "working tree"
+$dirty = git status --porcelain
+if ($dirty) { Die "this machine's tree is dirty; commit or stash first`n$dirty" }
+Ok "clean here"
+
+# ── 3. push ──────────────────────────────────────────────────────────────────
 if (-not $Check) {
     Step "push"
-    $dirty = git status --porcelain
-    if ($dirty) { Die "working tree is dirty; commit or stash first`n$dirty" }
     # No 2>&1 here: git writes progress to stderr, and redirecting a native
     # command's stderr in PowerShell 5.1 turns every line into an error
     # record - which aborts this script even on a successful push.
@@ -70,6 +79,9 @@ set -e
 cd ~/palette
 $pullCmd
 echo "HEAD=`$(git rev-parse --short HEAD)"
+echo "DIRTY<<EOF"
+git status --porcelain
+echo "EOF"
 if ss -tln 2>/dev/null | grep -q ":$ServerPort"; then
   echo "RUNNING=yes"
 else
@@ -89,6 +101,18 @@ if ($LASTEXITCODE -ne 0) { Die "could not reach or update $Server" }
 $serverHead = ($out | Select-String "^HEAD=").ToString().Split("=")[1].Trim()
 $serverRunning = ($out | Select-String "^RUNNING=").ToString().Split("=")[1].Trim() -eq "yes"
 Write-Host "  server HEAD $serverHead"
+
+# Everything between the DIRTY markers is git status output from the server.
+$lines = @($out)
+$from = [array]::IndexOf($lines, "DIRTY<<EOF")
+$to = [array]::IndexOf($lines, "EOF")
+if ($from -ge 0 -and $to -gt $from) {
+    $serverDirty = $lines[($from + 1)..($to - 1)] | Where-Object { $_.Trim() }
+    if ($serverDirty) {
+        Die "the server's tree is dirty - same commit, different code:`n  $($serverDirty -join "`n  ")"
+    }
+    Ok "clean there"
+}
 
 if ($serverHead -ne $localHead) {
     Die "server is on $serverHead, this machine is on $localHead"

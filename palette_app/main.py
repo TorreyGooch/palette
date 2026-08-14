@@ -36,6 +36,7 @@ CAPABILITIES = [
     "discard",     # /api/qs/discard removes a handed-over clip
     "api_only",    # PALETTE_API_ONLY serves an explanation instead of the UI
     "job_boot_id",  # job ids identify the process, so a restart is legible
+    "words",       # /api/qs/words exposes word timings for picking boundaries
 ]
 
 
@@ -534,6 +535,31 @@ def qs_search(q: str, mode: str = "semantic", source: Optional[str] = None,
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+@app.get("/api/qs/words")
+def qs_words(episode_id: str, start: float, end: float, pad: float = 0.0,
+             model: Optional[str] = None):
+    """Word timings and pauses, for choosing cut boundaries.
+
+    The step most worth not skipping: caption timestamps are far too coarse
+    to see a pause, and a cut that ends anywhere but just before one gets a
+    faded run-on. Whisper runs on the window only, so this is seconds on the
+    GPU rather than a transcription job.
+    """
+    if _remote():
+        from . import qs_remote
+
+        return _remote_call(lambda: qs_remote.get("/api/qs/words", {
+            "episode_id": episode_id, "start": start, "end": end,
+            "pad": pad, "model": model}, timeout=300))
+
+    from quotesource.cut import word_map
+
+    try:
+        return word_map(episode_id, start, end, pad=pad, model_size=model)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.get("/api/qs/context")
