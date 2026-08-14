@@ -66,9 +66,11 @@ def _cache_dir() -> Path:
 
 
 def _cache_gb() -> float:
+    """Ceiling for cached video. Small on purpose: video is the luxury, and
+    episode audio is kept elsewhere where eviction cannot reach it."""
     import os
 
-    return float(os.environ.get("QS_PULL_CACHE_GB", "6"))
+    return float(os.environ.get("QS_PULL_CACHE_GB", "4"))
 
 
 def _max_abr() -> int:
@@ -111,14 +113,58 @@ def estimate_mb(duration_s: float | None, mode: str) -> float | None:
     return duration_s * kbps / 8 / 1024
 
 
-def _evict_cache():
-    """Drop cached full files beyond the size cap, video first.
+def _audio_store_gb() -> float:
+    """Ceiling for kept episode audio. ~32 MB an episode at the capped
+    bitrate, so 40 GB is around 1,250 episodes — past anything likely, but a
+    number that fails loudly rather than quietly eating a shared disk."""
+    import os
 
-    Not pure LRU: a single video pull is ~20x the size of an audio one, so
-    plain LRU lets one of them evict several episodes' audio — and each of
-    those is a fresh full-episode download next time anyone cuts a quote
-    from them. Video is the expensive thing to keep and the cheaper thing to
-    lose, since it is only needed when you actually want the picture.
+    return float(os.environ.get("QS_AUDIO_STORE_GB", "40"))
+
+
+def stored_audio(ep_dir: Path) -> Path | None:
+    """The episode's kept audio, whatever container it arrived in."""
+    if ep_dir is None:
+        return None
+    for path in sorted(ep_dir.glob("audio.*")):
+        if path.suffix.lower() in (".m4a", ".webm", ".opus", ".mp3", ".ogg"):
+            return path
+    return None
+
+
+def _evict_audio_store():
+    """Trim kept episode audio to the ceiling, oldest use first.
+
+    Kept rather than cached because an evicted episode means a fresh
+    full-episode download the next time anyone cuts from it — the exact
+    traffic that draws rate limiting. At ~32 MB an episode the ceiling is
+    generous enough that this rarely runs.
+    """
+    from .paths import data_root
+
+    episodes = data_root() / "episodes"
+    if not episodes.exists():
+        return
+    files = [p for src in episodes.iterdir() if src.is_dir()
+             for ep in src.iterdir() if ep.is_dir()
+             for p in [stored_audio(ep)] if p]
+
+    cap = _audio_store_gb() * 1024 ** 3
+    total = sum(f.stat().st_size for f in files)
+    for f in sorted(files, key=lambda p: p.stat().st_atime):
+        if total <= cap:
+            break
+        total -= f.stat().st_size
+        f.unlink(missing_ok=True)
+
+
+def _evict_cache():
+    """Drop cached video beyond the size cap, least recently used first.
+
+    Only video lives here now — audio is kept per episode instead. The two
+    are budgeted apart on purpose: one 446 MB video pull is worth nine
+    episodes of audio, and sharing a budget let a luxury evict the thing
+    that is expensive to fetch again.
     """
     files = list(_cache_dir().glob("*"))
     cap = _cache_gb() * 1024 ** 3
@@ -141,9 +187,14 @@ async def _get_full_media(episode_id: str, url: str, mode: str,
                           ep_dir: Path) -> Path | None:
     """Return a local full copy of the episode's media for cutting.
 
-    Priority for flow: 1) the corpus audio store (audio mode — free after
-    Phase 2 transcription has run), 2) the pull cache (instant repeat pulls
-    from the same episode), 3) download full stream into the cache.
+    Audio is **kept**, beside the episode, not cached: at ~32 MB an episode
+    the whole corpus is ~52 GB, while an eviction costs a fresh full-episode
+    download the next time anyone cuts from it — the traffic that draws rate
+    limiting. It is also exactly what `qs transcribe` consumes, so a pull
+    pre-stages that episode for whisper.
+
+    Video is still cached and evictable: ~20x the size, and only wanted when
+    you actually need the picture.
 
     Full-file download is deliberate: yt-dlp section downloads go through
     ffmpeg's HTTP client, which YouTube throttles to a stall (measured 27+
@@ -151,15 +202,16 @@ async def _get_full_media(episode_id: str, url: str, mode: str,
     """
     import yt_dlp
 
-    # The cache is keyed by episode: an empty key would make every episode
-    # share one entry and serve the wrong footage under the right attribution.
+    # Keyed by episode: an empty key would make every episode share one
+    # entry and serve the wrong footage under the right attribution.
     if not episode_id:
         raise ValueError("episode_id is required for media fetch/caching")
 
-    if mode == "audio" and ep_dir is not None:
-        corpus_audio = ep_dir / "audio.m4a"
-        if corpus_audio.exists():
-            return corpus_audio
+    if mode == "audio":
+        kept = stored_audio(ep_dir)
+        if kept:
+            kept.touch()  # bump LRU within the store's ceiling
+            return kept
 
     ext = "mp4" if mode == "av" else "m4a"
     cached = _cache_dir() / f"{episode_id}.{ext}"
@@ -177,13 +229,23 @@ async def _get_full_media(episode_id: str, url: str, mode: str,
         # resamples to 16 kHz mono regardless, and the output is a spoken
         # word clip, so a modest bitrate costs nothing audible and roughly
         # halves the transfer. Falls through if nothing matches the cap.
+        # m4a preferred inside the cap so the kept file is the container
+        # everything downstream already expects.
         abr = _max_abr()
-        fmt = (f"bestaudio[abr<={abr}]/bestaudio[ext=m4a]"
-               f"/bestaudio/best")
+        fmt = (f"bestaudio[abr<={abr}][ext=m4a]/bestaudio[abr<={abr}]"
+               f"/bestaudio[ext=m4a]/bestaudio/best")
+
+    # Audio lands beside the episode and stays; video goes to the cache.
+    if mode == "audio" and ep_dir is not None:
+        ep_dir.mkdir(parents=True, exist_ok=True)
+        outtmpl = str(ep_dir / "audio.%(ext)s")
+    else:
+        outtmpl = str(_cache_dir() / f"{episode_id}.%(ext)s")
+
     opts = {
         "quiet": True, "no_warnings": True, "noprogress": True,
         "format": fmt,
-        "outtmpl": str(_cache_dir() / f"{episode_id}.%(ext)s"),
+        "outtmpl": outtmpl,
         # Downloading whole episodes back to back is what a rate limiter is
         # looking for. Capping throughput and pausing between requests keeps
         # the pattern boring; neither reduces total bytes.
@@ -204,6 +266,14 @@ async def _get_full_media(episode_id: str, url: str, mode: str,
             ydl.download([url])
 
     await loop.run_in_executor(None, _dl)
+
+    if mode == "audio" and ep_dir is not None:
+        kept = stored_audio(ep_dir)
+        if not kept:
+            return None
+        _evict_audio_store()
+        return kept
+
     if not cached.exists():
         cand = [p for p in _cache_dir().glob(f"{episode_id}.*")
                 if p.suffix in (".mp4", ".m4a", ".webm", ".mkv")]

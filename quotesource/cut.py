@@ -61,11 +61,14 @@ MIN_SPEECH_MS = 30.0    # sustained energy required to call something speech
 
 def _source_media(episode_id: str, ep_dir: Path) -> Path:
     """Local full media for the episode: corpus audio, cache, or download."""
-    from .pull import _cache_dir, _get_full_media
+    from .pull import _cache_dir, _get_full_media, stored_audio
 
-    corpus_audio = ep_dir / "audio.m4a"
-    if corpus_audio.exists():
-        return corpus_audio
+    # Kept episode audio, whatever container it arrived in. Present once
+    # anything has pulled or transcribed this episode, and free thereafter.
+    kept = stored_audio(ep_dir)
+    if kept:
+        kept.touch()
+        return kept
     for ext in (".m4a", ".mp4"):
         cached = _cache_dir() / f"{episode_id}{ext}"
         if cached.exists():
