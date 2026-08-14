@@ -71,12 +71,66 @@ def _cache_gb() -> float:
     return float(os.environ.get("QS_PULL_CACHE_GB", "6"))
 
 
+def _max_abr() -> int:
+    """Audio bitrate ceiling, kbps. Speech into a video mix; 80 is plenty."""
+    import os
+
+    return int(os.environ.get("QS_AUDIO_MAX_ABR", "80"))
+
+
+def _rate_limit():
+    """Bytes/sec ceiling for downloads, or None. Accepts 2M, 500K, or bytes."""
+    import os
+
+    raw = (os.environ.get("QS_DOWNLOAD_RATE") or "").strip().upper()
+    if not raw:
+        return None
+    mult = {"K": 1024, "M": 1024 ** 2, "G": 1024 ** 3}.get(raw[-1])
+    try:
+        return int(float(raw[:-1]) * mult) if mult else int(float(raw))
+    except ValueError:
+        return None
+
+
+def _sleep_between() -> float:
+    import os
+
+    return float(os.environ.get("QS_DOWNLOAD_SLEEP_S", "1"))
+
+
+def estimate_mb(duration_s: float | None, mode: str) -> float | None:
+    """Roughly what pulling this episode will cost, before doing it.
+
+    Worth showing rather than discovering: an av pull of a long episode is
+    gigabytes to extract seconds, and audio is ~20x cheaper for the same
+    quote.
+    """
+    if not duration_s:
+        return None
+    kbps = 2500 if mode == "av" else _max_abr()
+    return duration_s * kbps / 8 / 1024
+
+
 def _evict_cache():
-    """Drop least-recently-used cached full files beyond the size cap."""
-    files = sorted(_cache_dir().glob("*"), key=lambda p: p.stat().st_atime)
-    total = sum(f.stat().st_size for f in files)
+    """Drop cached full files beyond the size cap, video first.
+
+    Not pure LRU: a single video pull is ~20x the size of an audio one, so
+    plain LRU lets one of them evict several episodes' audio — and each of
+    those is a fresh full-episode download next time anyone cuts a quote
+    from them. Video is the expensive thing to keep and the cheaper thing to
+    lose, since it is only needed when you actually want the picture.
+    """
+    files = list(_cache_dir().glob("*"))
     cap = _cache_gb() * 1024 ** 3
-    for f in files:
+    total = sum(f.stat().st_size for f in files)
+    if total <= cap:
+        return
+
+    def priority(path):
+        is_video = path.suffix.lower() in (".mp4", ".mkv", ".webm")
+        return (0 if is_video else 1, path.stat().st_atime)
+
+    for f in sorted(files, key=priority):
         if total <= cap:
             break
         total -= f.stat().st_size
@@ -118,12 +172,28 @@ async def _get_full_media(episode_id: str, url: str, mode: str,
         fmt = (f"bestvideo[height<=?{h}][ext=mp4]+bestaudio[ext=m4a]"
                f"/best[height<=?{h}][ext=mp4]/best")
     else:
-        fmt = "bestaudio[ext=m4a]/bestaudio/best"
+        # "bestaudio" fetches the fattest stream YouTube offers, which for a
+        # 2-hour episode is ~130 MB to extract ten seconds of speech. Whisper
+        # resamples to 16 kHz mono regardless, and the output is a spoken
+        # word clip, so a modest bitrate costs nothing audible and roughly
+        # halves the transfer. Falls through if nothing matches the cap.
+        abr = _max_abr()
+        fmt = (f"bestaudio[abr<={abr}]/bestaudio[ext=m4a]"
+               f"/bestaudio/best")
     opts = {
         "quiet": True, "no_warnings": True, "noprogress": True,
         "format": fmt,
         "outtmpl": str(_cache_dir() / f"{episode_id}.%(ext)s"),
+        # Downloading whole episodes back to back is what a rate limiter is
+        # looking for. Capping throughput and pausing between requests keeps
+        # the pattern boring; neither reduces total bytes.
+        "retries": 5,
+        "extractor_retries": 3,
+        "sleep_interval_requests": _sleep_between(),
     }
+    rate = _rate_limit()
+    if rate:
+        opts["ratelimit"] = rate
     if mode == "av":
         opts["merge_output_format"] = "mp4"
 
@@ -237,7 +307,18 @@ def pull(episode_id: str, start: float, end: float, mode: str = "av",
 
     url = meta.get("url", "")
     kind = "rough (stream copy)" if rough else "exact (re-encoded)"
-    _progress(f"downloading {mode} section, {kind} ({e - s:.0f}s span)")
+    # Say what this will cost before spending it. A cached episode costs
+    # nothing, which is worth knowing too — it changes whether you batch
+    # several quotes from one episode or spread them across many.
+    cached_already = any((_cache_dir() / f"{episode_id}.{x}").exists()
+                         for x in ("m4a", "mp4"))
+    if cached_already:
+        _progress(f"using cached media ({e - s:.0f}s span, no download)")
+    else:
+        mb = estimate_mb(meta.get("duration"), mode)
+        cost = f", ~{mb:.0f} MB full episode" if mb else ""
+        _progress(f"downloading {mode} section, {kind} "
+                  f"({e - s:.0f}s span{cost})")
     if meta.get("source_id") and url.startswith("http") and "youtube" in url:
         ok = asyncio.run(_fetch_youtube_section(
             url, s, e, mode, dest, rough, episode_id, ep_dir))

@@ -184,6 +184,31 @@ passing it to `ingest` overrides for one run. Accepts `1800`, `30m`,
   The first search after a start also loads the model (~2 s extra), which is
   then released after 10 minutes idle.
 
+**Bandwidth: a pull downloads the whole episode**
+
+yt-dlp section downloads stall (measured 27+ min for a 30 s section), so
+the whole episode is fetched and cut locally. That trade is fine for a
+1-hour talk and expensive for a 3-hour interview, and it is what trips
+YouTube's rate limiting:
+
+| | median episode | one pull |
+|---|---|---|
+| audio | 1–2 h | ~70–130 MB |
+| **av** | 1–2 h | **~1.4–2.5 GB** |
+| av, worst Lex episode | 10.4 h | **~11.5 GB** |
+
+- **Use `--mode audio` unless you actually want the picture.** It is ~20x
+  cheaper for the same quote, and narration only needs sound.
+- **Batch quotes from one episode.** The first pull downloads; the rest are
+  free while it stays cached. The progress line says which is happening.
+- The cache is 6 GB LRU and **evicts video before audio**, since audio is
+  cheap to keep and expensive to refetch.
+- Tunables: `QS_AUDIO_MAX_ABR` (80 kbps ceiling — whisper resamples to 16
+  kHz anyway), `QS_DOWNLOAD_RATE` (e.g. `2M`), `QS_DOWNLOAD_SLEEP_S` (1),
+  `QS_PULL_MAX_HEIGHT` (720), `QS_PULL_CACHE_GB` (6).
+- If throttling starts, set `QS_DOWNLOAD_RATE=1M` and stop av pulls before
+  reaching for anything cleverer.
+
 **Things that will waste your time if you don't know them**
 - A `503` from search means the corpus server is stopped, not broken.
 - `qs` run on the desktop exits 1 and tells you the corpus is elsewhere.
