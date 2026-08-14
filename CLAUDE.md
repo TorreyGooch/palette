@@ -105,7 +105,7 @@ overrides the search.
 | `qs context <ep> <ts> [--window s]` / `--range a b` | raw transcript around a point — verify quotes here |
 | `qs episode-info <ep>` | full metadata + transcript stats |
 | `qs transcribe <ep>` / `--batch [--source id] [--limit N]` | whisper backfill; resumable, disk-floor guarded |
-| `qs pull <ep> --range a b --mode audio\|av [--rough] [--palette P] [--person X] [--pad s]` | fetch + stage onto a palette |
+| `qs pull <ep> --range a b [--mode av] [--rough] [--palette P] [--person X] [--pad s] [--outbox D]` | fetch + stage onto a palette. **audio by default**; `--mode av` costs ~50x more |
 | `qs words <ep> --range a b [--pad s]` | word timings + pauses; use to pick cut boundaries |
 | `qs cut <ep> --range a b [--palette P] [--person X] [--model m] [--no-stage]` | word-accurate audio clip + per-word manifest |
 
@@ -135,8 +135,9 @@ library. Reach for the CLI only for corpus maintenance: `ingest`, `index`,
    transcripts miss words, so grep and search are complementary, not ranked.
 3. For each candidate: `qs context <ep> <start> --window 20` and read — the
    chunk text is ~70 words; the actual quote often spans chunk borders.
-4. Only after reading context: `qs pull <ep> --range <start> <end> --mode av
-   --palette "<board>" --person "X"`.
+4. Only after reading context: `qs pull <ep> --range <start> <end>
+   --palette "<board>" --person "X"`. Add `--mode av` only if you need the
+   picture — it downloads the whole episode at 720p.
 
 **Exact-quote hunting**: `qs grep '"the exact phrase"'` first (note inner
 quotes for FTS5 phrase match). If it misses (caption wording drift), fall
@@ -160,10 +161,10 @@ passing it to `ingest` overrides for one run. Accepts `1800`, `30m`,
   before the quote. `attribution.quote_offset` says where the quote begins
   inside the file; use it when trimming. Omit `--rough` for an exact cut
   that starts on the quote (slower, re-encoded).
-- First `pull` from an episode downloads its full media (~1–3 min, capped
-  at 720p) into an LRU cache; later pulls from the same episode take
-  seconds. Once `qs transcribe` has run, audio pulls read the corpus audio
-  store and need no network at all.
+- First `pull` from an episode downloads its full media; later pulls and
+  cuts from that episode need no network at all, because the audio is kept
+  beside the episode rather than cached. `--mode av` downloads video into a
+  small evictable cache instead, so a repeat video pull may re-download.
 - Staged items land in `library.json` with `attribution` (person, show,
   episode, date, timestamped URL, quote text, transcript provenance), tags
   `quotesource` + person, type `audio` or `video`.
@@ -186,27 +187,32 @@ passing it to `ingest` overrides for one run. Accepts `1800`, `30m`,
 
 **Bandwidth: a pull downloads the whole episode**
 
-yt-dlp section downloads stall (measured 27+ min for a 30 s section), so
-the whole episode is fetched and cut locally. That trade is fine for a
-1-hour talk and expensive for a 3-hour interview, and it is what trips
-YouTube's rate limiting:
+yt-dlp section downloads stall (measured 27+ min for a 30 s section), so the
+whole episode is fetched and cut locally. That is what trips YouTube's rate
+limiting, and it is why **audio is the default and `--mode av` is the
+flag**:
 
-| | median episode | one pull |
+| | one pull, 2 h episode | second cut, same episode |
 |---|---|---|
-| audio | 1–2 h | ~70–130 MB |
-| **av** | 1–2 h | **~1.4–2.5 GB** |
-| av, worst Lex episode | 10.4 h | **~11.5 GB** |
+| audio (default) | ~50 MB | **free** |
+| `--mode av` | **~2.5 GB** | free while cached |
 
-- **Use `--mode audio` unless you actually want the picture.** It is ~20x
-  cheaper for the same quote, and narration only needs sound.
-- **Batch quotes from one episode.** The first pull downloads; the rest are
-  free while it stays cached. The progress line says which is happening.
-- The cache is 6 GB LRU and **evicts video before audio**, since audio is
-  cheap to keep and expensive to refetch.
-- Tunables: `QS_AUDIO_MAX_ABR` (80 kbps ceiling — whisper resamples to 16
-  kHz anyway), `QS_DOWNLOAD_RATE` (e.g. `2M`), `QS_DOWNLOAD_SLEEP_S` (1),
-  `QS_PULL_MAX_HEIGHT` (720), `QS_PULL_CACHE_GB` (6).
-- If throttling starts, set `QS_DOWNLOAD_RATE=1M` and stop av pulls before
+- **Only pass `--mode av` when you need the picture.** Same quote, ~50x the
+  data. Narration needs sound.
+- **Episode audio is kept, not cached** — it lands beside the episode as
+  `audio.*` under a 40 GB ceiling (~1,250 episodes). Measured: a second cut
+  from a stored episode moved 28 KB, not 88 MB.
+- It is also what `qs transcribe` consumes, so pulling a quote pre-stages
+  that episode for whisper.
+- Video is cached separately and evictable (4 GB), so a video pull can never
+  displace audio that is expensive to fetch again.
+- The progress line says what a pull will cost before it spends it, and says
+  when the episode is already local and costs nothing.
+- Tunables: `QS_AUDIO_MAX_ABR` (80 kbps ceiling — resolves to ~49 kbps in
+  practice; whisper resamples to 16 kHz anyway), `QS_AUDIO_STORE_GB` (40),
+  `QS_PULL_CACHE_GB` (4, video), `QS_DOWNLOAD_RATE` (e.g. `2M`),
+  `QS_DOWNLOAD_SLEEP_S` (1), `QS_PULL_MAX_HEIGHT` (720).
+- If throttling starts: set `QS_DOWNLOAD_RATE=1M` and stop av pulls before
   reaching for anything cleverer.
 
 **Things that will waste your time if you don't know them**

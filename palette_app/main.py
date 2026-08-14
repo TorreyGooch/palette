@@ -718,7 +718,9 @@ def qs_pull(body: dict = Body(...)):
             job["item"] = pull(
                 body["episode_id"],
                 float(body["start"]), float(body["end"]),
-                mode=body.get("mode", "av"),
+                # Audio unless asked: ~50 MB against ~2.5 GB for a 2h episode,
+                # and only the picture is missing.
+                mode=body.get("mode", "audio"),
                 palette_name=body.get("palette") or None,
                 person=body.get("person") or None,
                 pad=float(body.get("pad") or 0),
@@ -921,7 +923,7 @@ def qs_warm(body: dict = Body(...)):
     from quotesource.search import _find_episode_dir
 
     episode_id = body.get("episode_id")
-    mode = body.get("mode", "av")
+    mode = body.get("mode", "audio")
     if not episode_id:
         raise HTTPException(400, "episode_id required")
     key = f"{episode_id}:{mode}"

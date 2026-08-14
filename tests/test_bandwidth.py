@@ -56,6 +56,52 @@ def test_av_is_far_more_expensive_than_audio():
     assert av > audio * 20
 
 
+# ── audio is the default; video is the deliberate exception ───────────────────
+
+def test_pull_defaults_to_audio():
+    """The expensive mode should be the one you have to ask for."""
+    import inspect
+
+    assert inspect.signature(pull.pull).parameters["mode"].default == "audio"
+
+
+def test_cli_defaults_to_audio():
+    from quotesource.cli import main
+
+    with pytest.raises(SystemExit):
+        main(["pull", "--help"])  # smoke: parser builds
+
+
+def test_cli_parser_default(monkeypatch):
+    import argparse
+
+    from quotesource import cli
+
+    captured = {}
+    real = argparse.ArgumentParser.add_argument
+
+    def spy(self, *args, **kw):
+        if args and args[0] == "--mode" and "choices" in kw:
+            captured["default"] = kw.get("default")
+        return real(self, *args, **kw)
+
+    monkeypatch.setattr(argparse.ArgumentParser, "add_argument", spy)
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    assert captured.get("default") == "audio"
+
+
+def test_api_defaults_to_audio():
+    """A request that omits mode must not download gigabytes."""
+    import inspect
+
+    from palette_app import main
+
+    src = inspect.getsource(main.qs_pull)
+    assert 'body.get("mode", "audio")' in src
+    assert 'body.get("mode", "av")' not in src
+
+
 def test_estimate_is_none_without_a_duration():
     assert pull.estimate_mb(None, "audio") is None
     assert pull.estimate_mb(0, "av") is None

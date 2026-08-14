@@ -419,7 +419,8 @@ def main(argv=None):
                        parents=[shared])
     p.add_argument("episode_id")
     p.add_argument("--range", nargs=2, type=float, required=True, metavar=("START", "END"))
-    p.add_argument("--mode", choices=["audio", "av"], default="av")
+    p.add_argument("--mode", choices=["audio", "av"], default="audio",
+                   help="audio (default, ~50 MB) or av (~2.5 GB for a 2h episode)")
     p.add_argument("--palette", help="palette name (created if missing)")
     p.add_argument("--person", help="speaker for attribution + tag")
     p.add_argument("--pad", type=float, default=0.0, help="extra seconds each side after snapping")

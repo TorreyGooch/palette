@@ -28,9 +28,19 @@ Run `python run.py` once and set the library folder to a roomy disk, e.g.
 `D:\palette-library\quotesource\` automatically. To put the corpus
 somewhere else, set `QUOTESOURCE_DATA`.
 
-Budget: transcripts+metadata ~2.5 GB per 1,000 YouTube episodes; whisper
-audio ~25 MB/hour of content (≈15 GB for 600 hours); pull cache capped by
-`QS_PULL_CACHE_GB` (default 6).
+Budget, measured on a 1,637-episode / 2,518-hour corpus:
+
+| | size | notes |
+|---|---|---|
+| transcripts + metadata | ~2.5 GB per 1,000 episodes | irreplaceable, back this up |
+| index + embeddings | ~1.9 GB | regenerates in minutes on the GPU |
+| kept episode audio | ~32 MB each, **~52 GB for everything** | ceiling `QS_AUDIO_STORE_GB` (40) |
+| video cache | `QS_PULL_CACHE_GB` (4) | evictable luxury |
+
+Audio is kept rather than cached because an eviction costs a fresh
+full-episode download the next time anyone cuts from that episode — the
+traffic that draws rate limiting. It accumulates only for episodes you
+actually pull from, and doubles as the input `qs transcribe` needs.
 
 ## 3. Run the corpus API
 

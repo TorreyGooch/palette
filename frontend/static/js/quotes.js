@@ -171,9 +171,12 @@ const Quotes = {
         </div>
         <div class="q-context hidden" id="q-context-${i}"></div>
         <div class="q-pull hidden" id="q-pull-${i}">
-          <select id="q-pull-mode-${i}" style="width:90px">
-            <option value="av">av</option>
+          <!-- Audio first because it is the default and ~50x cheaper: the
+               same quote costs ~50 MB against ~2.5 GB for a 2h episode. -->
+          <select id="q-pull-mode-${i}" style="width:130px"
+                  title="audio: ~50 MB, kept for future cuts. av: whole episode at 720p, gigabytes — only when you want the picture.">
             <option value="audio">audio</option>
+            <option value="av">av (large)</option>
           </select>
           <select id="q-pull-precision-${i}" style="width:210px" title="rough: fast stream copy with ~10s slop, original quality — trim later. exact: re-encoded, starts on the quote. word-accurate: whispers a window and snaps to the waveform, audio only, writes a per-word manifest.">
             <option value="rough">rough (fast, trim later)</option>
@@ -234,11 +237,24 @@ const Quotes = {
     const h = this.hits[i];
     const precision = document.getElementById(`q-pull-precision-${i}`).value;
     const wordAccurate = precision === 'word';
+    const mode = document.getElementById(`q-pull-mode-${i}`).value;
+
+    // A section download stalls, so the whole episode comes down. In audio
+    // that is ~50 MB and kept for later; in av it is gigabytes for one clip,
+    // which is worth a deliberate click rather than a surprise.
+    if (mode === 'av' && !this._avConfirmed) {
+      if (!confirm('Video mode downloads the entire episode — gigabytes for '
+                   + 'a few seconds of clip, and a common cause of YouTube '
+                   + 'throttling.\n\nAudio is ~50x smaller for the same quote. '
+                   + 'Continue with video?')) return;
+      this._avConfirmed = true;   // asked once per session, not per clip
+    }
+
     const body = {
       episode_id: h.episode_id,
       start: h.start,
       end: h.end,
-      mode: document.getElementById(`q-pull-mode-${i}`).value,
+      mode,
       rough: precision === 'rough',
       palette: document.getElementById(`q-pull-palette-${i}`).value.trim(),
       person: document.getElementById(`q-pull-person-${i}`).value.trim(),

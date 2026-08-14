@@ -330,7 +330,7 @@ async def _fetch_rss_audio(audio_url: str, start: float, end: float,
     return code == 0 and dest.exists()
 
 
-def pull(episode_id: str, start: float, end: float, mode: str = "av",
+def pull(episode_id: str, start: float, end: float, mode: str = "audio",
          palette_name: str | None = None, person: str | None = None,
          pad: float = 0.0, rough: bool = False, progress_cb=None,
          stage: bool = True, outbox: str | None = None,
