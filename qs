@@ -23,4 +23,17 @@ pick_python() {
 }
 
 PY="$(pick_python)"
+
+# The GPU stack needs the pip-installed NVIDIA libs on the loader path, and
+# a missing libcublas surfaces as "not found or cannot be loaded" rather
+# than anything about configuration. Derive it from the interpreter we just
+# chose so ./qs works without sourcing anything; an existing value wins.
+if [ -z "${LD_LIBRARY_PATH:-}" ]; then
+  site="$("$PY" -c 'import site; print(site.getsitepackages()[0])' 2>/dev/null)"
+  if [ -n "$site" ] && [ -d "$site/nvidia" ]; then
+    LD_LIBRARY_PATH="$(find "$site/nvidia" -maxdepth 2 -name lib -type d 2>/dev/null | tr '\n' ':')"
+    export LD_LIBRARY_PATH
+  fi
+fi
+
 PYTHONPATH="$(pwd):${PYTHONPATH}" exec "$PY" -m quotesource "$@"
