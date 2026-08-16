@@ -144,13 +144,37 @@ def fetch_source_audio(source_id: str, limit: int | None = None,
 
 # ── lending it to a captioned episode ─────────────────────────────────────────
 
+_SERIES_NO = re.compile(r"(\d+)\s*$")
+
+
+def series_number(title: str) -> str | None:
+    """The trailing index of a numbered series, e.g. 'discussion 4' -> '4'.
+
+    A one-digit difference barely moves a sequence ratio: 'Platonic Space
+    discussion 2' scores 0.96 against 'Platonic Space discussion 4', and
+    'Discussion with Michael Johnson 1' scores 0.97 against the unnumbered
+    episode. Those are different recordings, and pairing them would hand an
+    episode the wrong audio.
+    """
+    m = _SERIES_NO.search(_norm_title(title))
+    return m.group(1) if m else None
+
+
 def match_by_title(title: str, candidates, min_ratio: float = 0.60):
-    """Closest (ep_dir, meta) by title, or None. candidates: [(dir, meta)]."""
+    """Closest (ep_dir, meta) by title, or None. candidates: [(dir, meta)].
+
+    Titles whose trailing series numbers disagree are never paired, even at a
+    high ratio. Refusing a real pair only costs an unlinked episode; accepting
+    a false one puts someone else's words under this episode's transcript.
+    """
     import difflib
 
     wanted = _norm_title(title)
+    wanted_no = series_number(title)
     best, score = None, 0.0
     for ep_dir, meta in candidates:
+        if series_number(meta.get("title")) != wanted_no:
+            continue
         ratio = difflib.SequenceMatcher(
             None, wanted, _norm_title(meta.get("title"))).ratio()
         if ratio > score:

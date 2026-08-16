@@ -215,6 +215,59 @@ def test_unrelated_titles_are_not_paired(corpus):
     assert result["linked"] == 0 and result["unmatched"] == 1
 
 
+def test_numbered_series_entries_are_never_paired(corpus):
+    """Real pairs from Michael Levin's channel: 'Platonic Space discussion 2'
+    scores 0.96 against 'discussion 4'. One differing digit is invisible to a
+    sequence ratio, and these are different recordings."""
+    add_episode(corpus, "yt", "v1", title="Platonic Space discussion 2", duration=3600)
+    add_episode(corpus, "feed", "r1", title="Platonic Space discussion 4",
+                duration=3600, audio_bytes=b"wrong episode")
+
+    result = feedaudio.link_matching("yt", "feed", apply=True)
+
+    assert result["linked"] == 0 and result["unmatched"] == 1
+    assert feedaudio.stored_audio(corpus / "episodes" / "yt" / "v1") is None
+
+
+def test_a_numbered_entry_does_not_match_the_unnumbered_one(corpus):
+    """'Discussion with Michael Johnson 1' vs 'Discussion with Michael
+    Johnson' scored 0.97 and is a different episode."""
+    add_episode(corpus, "yt", "v1", title="Discussion with Michael Johnson 1",
+                duration=3600)
+    add_episode(corpus, "feed", "r1", title="Discussion with Michael Johnson",
+                duration=3600, audio_bytes=b"wrong episode")
+
+    assert feedaudio.link_matching("yt", "feed", apply=True)["linked"] == 0
+
+
+def test_matching_series_numbers_still_pair(corpus):
+    add_episode(corpus, "yt", "v1", title="Platonic Space discussion 4", duration=3600)
+    add_episode(corpus, "feed", "r1", title="Platonic Space discussion 4",
+                duration=3600, audio_bytes=b"right episode")
+
+    assert feedaudio.link_matching("yt", "feed", apply=True)["linked"] == 1
+
+
+@pytest.mark.parametrize("title,expected", [
+    ("Platonic Space discussion 4", "4"),
+    ("Conversation with Iain McGilchrist #2", "2"),
+    ("Cancer Talk by Michael Levin", None),
+    ("", None),
+])
+def test_series_number_extraction(title, expected):
+    assert feedaudio.series_number(title) == expected
+
+
+def test_a_trailing_year_does_not_block_an_identical_title(corpus):
+    """Both sides carry the same parenthetical year, so they still agree."""
+    add_episode(corpus, "yt", "v1", title="Cancer Talk by Michael Levin (2021)",
+                duration=3600)
+    add_episode(corpus, "feed", "r1", title="Cancer Talk by Michael Levin (2021)",
+                duration=3600, audio_bytes=b"a")
+
+    assert feedaudio.link_matching("yt", "feed", apply=True)["linked"] == 1
+
+
 def test_dry_run_changes_nothing(corpus):
     add_episode(corpus, "yt", "v1", title="Same Show", duration=3600)
     add_episode(corpus, "feed", "r1", title="Same Show", duration=3600,
