@@ -12,8 +12,10 @@ Every cut clip gets a sidecar manifest with per-word timings relative to the
 clip's own start, so downstream tools can place beats on specific words.
 """
 import asyncio
+import difflib
 import json
 import os
+import re
 import subprocess
 import tempfile
 from datetime import datetime
@@ -55,6 +57,54 @@ WINDOW_PAD_S = float(os.environ.get("QS_CUT_WINDOW_PAD_S", "15"))
 FRAME_MS = 10.0
 ANALYSIS_SR = 16000
 MIN_SPEECH_MS = 30.0    # sustained energy required to call something speech
+
+# How much of the caption text for a span must survive in what whisper hears
+# in the audio at that span. Guards against cutting from audio whose timeline
+# does not match the transcript that located the quote — a podcast feed with a
+# pre-roll the YouTube upload lacks, say. The failure this prevents is silent:
+# the clip sounds clean, because snapping works on whatever audio is there, and
+# only the words are wrong. Measured on Dwarkesh episodes with known-good
+# audio: correct windows score 0.84-0.92, windows offset by 45-90s score
+# 0.06-0.16. Nothing lands between, so the threshold sits in the gap.
+ALIGN_MIN = float(os.environ.get("QS_CUT_ALIGN_MIN", "0.45"))
+
+# Below this many caption words the score is too noisy to act on, so it is
+# recorded but not enforced.
+ALIGN_MIN_WORDS = 8
+
+
+# ── does the audio say what the transcript says? ───────────────────────────────
+
+_WORD_RE = re.compile(r"[a-z0-9']+")
+
+
+def _tokens(text: str) -> list[str]:
+    return _WORD_RE.findall((text or "").lower())
+
+
+def alignment_score(expected: str, heard: str) -> float:
+    """0-1 agreement between transcript text and what whisper heard.
+
+    Ordered comparison, not a bag of words: a shifted timeline produces
+    unrelated text, and order carries the signal that repeated filler words
+    would otherwise wash out.
+    """
+    a, b = _tokens(expected), _tokens(heard)
+    if not a or not b:
+        return 0.0
+    return round(difflib.SequenceMatcher(None, a, b).ratio(), 4)
+
+
+def caption_text(ep_dir: Path, start: float, end: float) -> str:
+    """The stored transcript's text over an absolute span of the episode."""
+    tpath = ep_dir / "transcript.json"
+    if not tpath.exists():
+        return ""
+    segments = json.loads(tpath.read_text(encoding="utf-8")).get("segments", [])
+    return " ".join(
+        s["text"].strip() for s in segments
+        if s.get("start", 0) < end and s.get("end", s.get("start", 0)) > start
+    )
 
 
 # ── audio sourcing ────────────────────────────────────────────────────────────
@@ -446,6 +496,27 @@ def cut_quote(episode_id: str, start: float, end: float,
         })
     quote_text = " ".join(w["word"] for w in clip_words)
 
+    # The transcript located this quote; the audio has to agree that it is
+    # there. When they disagree the clip is not merely imprecise, it is a
+    # different sentence in the same voice — so refuse rather than ship it.
+    _progress("checking audio against transcript")
+    expected = caption_text(ep_dir, abs_start, abs_end)
+    align = alignment_score(expected, quote_text)
+    enforced = len(_tokens(expected)) >= ALIGN_MIN_WORDS
+    if enforced and align < ALIGN_MIN:
+        prov = meta.get("audio_provenance") or {}
+        where = prov.get("linked_from")
+        raise RuntimeError(
+            f"audio does not match the transcript at {abs_start:.1f}-"
+            f"{abs_end:.1f}s (agreement {align:.2f}, need {ALIGN_MIN:.2f}).\n"
+            f"  transcript says: {expected[:120]!r}\n"
+            f"  audio says     : {quote_text[:120]!r}\n"
+            + (f"  this episode's audio is linked from {where}; the two "
+               f"versions' timelines likely differ.\n" if where else
+               "  the stored audio may be a different edit of this episode.\n")
+            + "  Set QS_CUT_ALIGN_MIN=0 to cut anyway."
+        )
+
     lib_root = get_library_path()
     if not lib_root:
         raise RuntimeError("palette library not configured — run the app once")
@@ -474,6 +545,7 @@ def cut_quote(episode_id: str, start: float, end: float,
         "precision": "word_accurate",
         "quote_text": quote_text,
         "transcript_provenance": "whisper_window",
+        "audio_provenance": meta.get("audio_provenance"),
     }
 
     manifest = {
@@ -492,6 +564,8 @@ def cut_quote(episode_id: str, start: float, end: float,
                             round(win_start + w_end, 3)],
             "snapped_to": [round(win_start + onset, 3),
                            round(win_start + offset, 3)],
+            "caption_alignment": align,
+            "caption_alignment_enforced": enforced,
         },
     }
     manifest_path = dest.with_suffix(".words.json")

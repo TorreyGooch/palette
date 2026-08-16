@@ -5,6 +5,7 @@ Exit codes: 0 success, 1 error (error JSON on stderr), 2 usage.
 """
 import argparse
 import json
+import re
 import sys
 
 
@@ -334,6 +335,34 @@ def _warn_if_corpus_elsewhere(command: str):
     raise SystemExit(1)
 
 
+# A YouTube id is exactly 11 characters of [A-Za-z0-9_-], so roughly one in
+# thirty starts with a dash — argparse then reads it as an unknown option and
+# the command dies with "the following arguments are required". Real ids in
+# the corpus include -RXD4bTuFTo and --xKsIgv7tE. No option in this CLI has
+# that shape, so inserting the end-of-options marker is unambiguous.
+_YT_ID = re.compile(r"-[A-Za-z0-9_-]{10}$")
+
+
+def _protect_leading_dash_ids(argv):
+    """Move a dash-leading episode id behind an end-of-options marker.
+
+    The marker has to go last, not in front of the id where it sits: `--`
+    makes everything after it positional, so protecting the id in place would
+    stop the flags that follow from parsing at all. Moving the id to the end
+    is safe because these commands take exactly one positional besides the
+    subcommand, and a subcommand never has an id's shape.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+    argv = list(argv)
+    if "--" in argv:
+        return argv
+    for i, tok in enumerate(argv):
+        if _YT_ID.fullmatch(tok):
+            return argv[:i] + argv[i + 1:] + ["--", tok]
+    return argv
+
+
 def main(argv=None):
     shared = argparse.ArgumentParser(add_help=False)
     shared.add_argument("--pretty", action="store_true", help="human output instead of JSON")
@@ -462,7 +491,7 @@ def main(argv=None):
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_transcribe)
 
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_protect_leading_dash_ids(argv))
     _warn_if_corpus_elsewhere(args.command)
 
     try:
