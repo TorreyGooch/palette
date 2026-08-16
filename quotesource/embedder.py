@@ -17,7 +17,12 @@ from datetime import datetime
 
 from .indexer import connect, _ensure_schema
 
-DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
+# The corpus is embedded with bge-large and search refuses to mix models, so a
+# small default is not a gentler fallback — it is a broken one. This was set to
+# bge-small while every stored vector was bge-large, which meant search failed
+# for anyone whose shell did not happen to export QS_EMBED_MODEL. Defaults have
+# to describe the data that exists.
+DEFAULT_MODEL = "BAAI/bge-large-en-v1.5"
 
 
 def model_name() -> str:

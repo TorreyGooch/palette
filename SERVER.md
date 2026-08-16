@@ -268,11 +268,16 @@ dpkg -l | grep -E 'nvidia-driver-[0-9]'                                         
 
 ### Choosing an embedding model
 
-`QS_EMBED_MODEL` (default `BAAI/bge-small-en-v1.5`). On a GPU the larger
-models cost minutes rather than hours, so `BAAI/bge-large-en-v1.5`
-(1024-dim) is worth it for retrieval quality. **Never mix models in one
-vector store** — similarity scores across different models are
-meaningless. Changing it means `qs embed --reset`.
+`QS_EMBED_MODEL` (default `BAAI/bge-large-en-v1.5`, 1024-dim). On a GPU the
+larger models cost minutes rather than hours, so it is worth it for retrieval
+quality. **Never mix models in one vector store** — similarity scores across
+different models are meaningless. Changing it means `qs embed --reset`.
+
+The default used to be `bge-small` while the corpus was built with
+`bge-large`, which meant search refused to run for any shell that did not
+export `QS_EMBED_MODEL` — and nothing on the server exported it. If you ever
+change models, change the default in `embedder.py` too, rather than relying
+on an env var that only exists in the terminal you happened to build from.
 
 ComfyUI and any video model are separate processes — they use the GPU
 already and share it with these jobs, so avoid running a whisper batch

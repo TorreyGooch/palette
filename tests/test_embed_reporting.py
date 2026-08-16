@@ -32,12 +32,25 @@ def corpus(tmp_path, monkeypatch):
 
 
 def test_reports_the_stored_model_not_the_environment(corpus, monkeypatch):
-    monkeypatch.delenv("QS_EMBED_MODEL", raising=False)  # default is bge-small
+    # Set explicitly: deleting the var would now leave the default agreeing
+    # with the store, and the test would pass without proving anything.
+    monkeypatch.setenv("QS_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
     from quotesource.embedder import embed_stats
 
     stats = embed_stats()
     assert stats["model"] == "BAAI/bge-large-en-v1.5"
     assert stats["embedded"] == 1
+
+
+def test_default_matches_the_corpus_that_exists(monkeypatch):
+    """A default that disagrees with the stored vectors is not a fallback, it
+    is an outage: search refuses to mix models, so anyone whose shell lacked
+    QS_EMBED_MODEL got no search at all."""
+    monkeypatch.delenv("QS_EMBED_MODEL", raising=False)
+    from quotesource.embedder import DEFAULT_MODEL, model_name
+
+    assert DEFAULT_MODEL == "BAAI/bge-large-en-v1.5"
+    assert model_name() == DEFAULT_MODEL
 
 
 def test_warns_when_the_environment_disagrees(corpus, monkeypatch):

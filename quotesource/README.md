@@ -47,7 +47,7 @@ qs search "the brain isn't doing backpropagation" --person Hinton
 ```
 
 `qs search` matches meaning, `qs grep` matches words; use both and
-triangulate with `qs context`. Embeddings: BAAI/bge-small-en-v1.5 via
+triangulate with `qs context`. Embeddings: BAAI/bge-large-en-v1.5 via
 fastembed (local ONNX, no torch), vectors in SQLite, exact cosine search.
 Override the model with `QS_EMBED_MODEL` (then `qs embed --reset`).
 Search JSON includes `coverage` so partial embedding states are visible.
