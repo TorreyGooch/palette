@@ -38,6 +38,37 @@ def test_status_parses_the_scripts_json(ssh):
     assert state["running"] is True
     assert state["rss_mb"] == 210
     assert state["action"] == "status"
+
+
+def test_a_stale_server_is_visible_in_the_status(ssh):
+    """A pull does not change what a running process serves; only a restart
+    does. status once reported the repo's HEAD as the running version, which
+    made a server 33 hours behind look current."""
+    fake_run, _ = ssh
+    fake_run.stdout = json.dumps({
+        "running": True, "port": 7862, "rss_mb": 210,
+        "version": "a29a420", "repo_version": "d94cf38", "stale": True,
+    })
+
+    from palette_app import main
+
+    state = main.qs_server_status()
+    assert state["stale"] is True
+    assert state["version"] != state["repo_version"]
+
+
+def test_a_current_server_is_not_flagged(ssh):
+    fake_run, _ = ssh
+    fake_run.stdout = json.dumps({
+        "running": True, "port": 7862, "rss_mb": 210,
+        "version": "d94cf38", "repo_version": "d94cf38", "stale": False,
+    })
+
+    from palette_app import main
+
+    state = main.qs_server_status()
+    assert state["stale"] is False
+    assert state["version"] == state["repo_version"]
     assert state["host"] == "torrey@10.0.0.1"
 
 
