@@ -67,12 +67,20 @@ curl -s 'http://127.0.0.1:7861/api/qs/search?q=<phrase>&limit=5'
 Everything under `/api/qs/*` on **:7861** works whether the corpus is local
 or remote; that is the whole point of the bridge. Prefer it to the CLI.
 
-**What is in the corpus right now:** ~1,639 episodes — Jordan Peterson
-(1,079) and Lex Fridman (560, full episodes only; clip re-uploads are
-filtered out by `min_duration`). 385k chunks, 100% embedded with
-`bge-large-en-v1.5`. Lex's transcripts are human-made and punctuated;
-Peterson's are mostly YouTube auto-captions, so expect missing punctuation
-and the occasional mis-hearing there.
+**What is in the corpus right now:** ~3,034 episodes. Searchable (captions or
+whisper): Jordan Peterson (1,079), Lex Fridman (560), Dwarkesh (125). 423k
+chunks, 100% embedded with `bge-large-en-v1.5`. Lex's transcripts are
+human-made and punctuated; Peterson's are mostly YouTube auto-captions, so
+expect missing punctuation and the occasional mis-hearing there.
+
+Audio-only, **not yet searchable** — ingested from podcast feeds, which carry
+no captions, so each needs whisper before `qs search` can find it: the Jordan
+B. Peterson Podcast (590), Theories of Everything (358, the show with the most
+Michael Levin appearances), Thoughtforms/Michael Levin (186), Dwarkesh (136,
+whose audio is instead linked to `dwarkesh_yt` — see below). Feeds are found
+through Apple's public directory, which is a directory over RSS: its search
+API returns the publisher's own feed URL, and the audio is a plain enclosure
+on their CDN. Spotify is not usable — metadata-only API, DRM'd audio.
 
 ## qs commands (all emit JSON; `--pretty` for humans)
 
@@ -362,6 +370,41 @@ downstream contract — it is what lets visual beats land on specific words.
 the audio file. `attribution.range` is the only field in episode time.
 Every word listed is fully present in the audio; partial words at the
 edges are dropped rather than reported with times that run past the end.
+
+## Transcript from one place, audio from another
+
+A source no longer has to supply both. YouTube gives captions for a few KB and
+no throttling; a podcast feed gives the same conversation's audio from a CDN
+that wants you to have it, with range requests and no 403. Dwarkesh is set up
+this way: `dwarkesh_yt` (YouTube, captions, searchable) and `dwarkesh` (RSS,
+136 episodes of audio on disk).
+
+The join is a file. `cut._source_media` checks `stored_audio(ep_dir)` before
+anything else, so an `audio.*` hardlinked into the captioned episode's own
+directory is used with no network and no code change. `metadata.json` records
+where it came from:
+
+```jsonc
+"audio_provenance": {
+  "linked_from": "dwarkesh/rss-da97217b6203",
+  "offset_s": 0.0,
+  "alignment": "duration_exact"      // or "probed_constant"
+}
+```
+
+**The two versions do not always share a timeline.** A feed with a pre-roll
+the upload lacks puts every caption timestamp tens of seconds out. Measured on
+Dwarkesh: half the catalogue matches to the second, and the rest cluster at
+30-60s — a fixed pre-roll, not random drift.
+
+That is why `qs cut` checks. It compares the stored transcript's text for the
+span against what whisper actually heard and refuses below
+`QS_CUT_ALIGN_MIN` (0.45), recording `caption_alignment` in `cut_diagnostics`
+either way. **This is the guard that makes the whole arrangement safe**: a
+misaligned cut is not obviously broken, it is a fluent clip of a different
+sentence in the right voice, and nothing downstream would catch it. If you see
+that refusal, the audio and the transcript disagree — do not reach for
+`QS_CUT_ALIGN_MIN=0` without listening first.
 
 ## Looking at a whole video as contact sheets
 

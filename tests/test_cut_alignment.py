@@ -45,9 +45,17 @@ def test_empty_either_side_is_zero_not_a_crash():
 
 
 def test_threshold_sits_in_the_measured_gap():
-    """Measured on episodes with known-good audio: aligned windows scored
-    0.84-0.92, windows offset by 45-90s scored 0.06-0.16."""
-    assert 0.16 < cut.ALIGN_MIN < 0.84
+    """18 real cuts on known-good audio scored 0.585-0.962; windows offset by
+    45-90s scored 0.06-0.16. The threshold has to clear both ends."""
+    WORST_GENUINE, BEST_MISALIGNED = 0.585, 0.163
+    assert BEST_MISALIGNED < cut.ALIGN_MIN < WORST_GENUINE
+
+
+def test_threshold_favours_refusing_over_passing():
+    """A false refusal is loud and overridable; a false pass ships a quote the
+    speaker never said at that timestamp."""
+    WORST_GENUINE, BEST_MISALIGNED = 0.585, 0.163
+    assert (cut.ALIGN_MIN - BEST_MISALIGNED) > (WORST_GENUINE - cut.ALIGN_MIN)
 
 
 def test_threshold_is_overridable(monkeypatch):

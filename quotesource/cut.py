@@ -63,9 +63,16 @@ MIN_SPEECH_MS = 30.0    # sustained energy required to call something speech
 # does not match the transcript that located the quote — a podcast feed with a
 # pre-roll the YouTube upload lacks, say. The failure this prevents is silent:
 # the clip sounds clean, because snapping works on whatever audio is there, and
-# only the words are wrong. Measured on Dwarkesh episodes with known-good
-# audio: correct windows score 0.84-0.92, windows offset by 45-90s score
-# 0.06-0.16. Nothing lands between, so the threshold sits in the gap.
+# only the words are wrong.
+#
+# Measured, not guessed. Across 18 real cuts on episodes with known-good audio
+# the score ran 0.585-0.962 (median 0.87); the low end is auto-captions, and
+# snapping plus partial segments at the span edges cost more than the raw
+# window comparison suggests. Windows deliberately offset by 45-90s scored
+# 0.06-0.16. 0.45 sits in the empty middle, ~0.13 below the worst genuine cut
+# and ~0.29 above the best misaligned one. The asymmetry is deliberate: a
+# false refusal is visible and says how to override, a false pass ships a
+# quote the speaker never said there.
 ALIGN_MIN = float(os.environ.get("QS_CUT_ALIGN_MIN", "0.45"))
 
 # Below this many caption words the score is too noisy to act on, so it is
