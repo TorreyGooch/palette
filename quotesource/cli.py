@@ -179,6 +179,25 @@ def cmd_episode_info(args):
     _out(episode_info(args.episode_id), args.pretty)
 
 
+def cmd_fetch_audio(args):
+    from .feedaudio import fetch_source_audio
+
+    progress = None if args.quiet else (
+        lambda line: print(f"  {line}", flush=True))
+    _out(fetch_source_audio(args.source_id, limit=args.limit,
+                            sleep_s=args.sleep, progress=progress), args.pretty)
+
+
+def cmd_link_audio(args):
+    from .feedaudio import link_matching
+
+    result = link_matching(args.caption_source, args.feed_source,
+                           tolerance=args.tolerance, apply=args.apply)
+    if not args.apply:
+        result["note"] = "dry run - pass --apply to link"
+    _out(result, args.pretty)
+
+
 def cmd_transcribe(args):
     from .transcribe import transcribe_batch, transcribe_episode
     from .search import _find_episode_dir
@@ -480,6 +499,28 @@ def main(argv=None):
                         "(default: $QS_OUTBOX, off if unset)")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_cut)
+
+    p = sub.add_parser("fetch-audio",
+                       help="download feed audio for an RSS source (no transcription)",
+                       parents=[shared])
+    p.add_argument("source_id")
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--sleep", type=float, default=2.0,
+                   help="seconds between requests (default 2)")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_fetch_audio)
+
+    p = sub.add_parser("link-audio",
+                       help="lend feed audio to a captioned source's episodes",
+                       parents=[shared])
+    p.add_argument("caption_source", help="the source with transcripts, e.g. dwarkesh_yt")
+    p.add_argument("feed_source", help="the source with audio, e.g. dwarkesh")
+    p.add_argument("--tolerance", type=float, default=1.0,
+                   help="max duration difference in seconds to treat as the "
+                        "same timeline (default 1)")
+    p.add_argument("--apply", action="store_true",
+                   help="actually link; without it, report what would happen")
+    p.set_defaults(func=cmd_link_audio)
 
     p = sub.add_parser("transcribe", help="whisper transcription (single or batch queue)",
                        parents=[shared])
