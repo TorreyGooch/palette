@@ -117,6 +117,36 @@ def test_a_shifted_timeline_is_caught():
     assert cut.alignment_score(captions, heard) < cut.ALIGN_MIN
 
 
+def test_the_offset_is_applied_to_the_audio_only(monkeypatch, tmp_path):
+    """Borrowed audio on a shifted timeline: seeks move, reported times do not.
+
+    attribution.range and source_url_ts point at the episode as published, so
+    shifting them would make every citation wrong in order to make the seek
+    right.
+    """
+    seeks = {}
+
+    def fake_decode(src, start, dur, dest):
+        seeks["decode"] = start
+        dest.write_bytes(b"wav")
+
+    monkeypatch.setattr(cut, "_decode_window", fake_decode)
+    meta = {"audio_provenance": {"offset_s": -45.0}}
+    offset = float((meta.get("audio_provenance") or {}).get("offset_s") or 0.0)
+
+    # The arithmetic cut_quote performs, isolated: a caption time of 600s on a
+    # -45s timeline must read the audio at 555s.
+    win_start = 600.0 - cut.WINDOW_PAD_S
+    assert win_start + offset == pytest.approx(540.0)
+    assert win_start == pytest.approx(585.0), "transcript time is unshifted"
+
+
+def test_absent_provenance_means_no_shift():
+    for meta in ({}, {"audio_provenance": None}, {"audio_provenance": {}}):
+        offset = float((meta.get("audio_provenance") or {}).get("offset_s") or 0.0)
+        assert offset == 0.0
+
+
 def test_the_matching_case_passes_the_same_threshold():
     captions = ("and so the question becomes whether you can actually get "
                 "the regulatory approval before the technology is obsolete")

@@ -445,13 +445,20 @@ def cut_quote(episode_id: str, start: float, end: float,
     _progress("locating audio")
     src = _source_media(episode_id, ep_dir)
 
+    # Borrowed audio can sit on a different timeline from the transcript that
+    # located the quote — a YouTube upload with an intro the feed lacks, say.
+    # Everything reported stays in transcript time, so source_url_ts and
+    # attribution.range keep pointing at the episode as published; the offset
+    # is applied only where we actually touch the audio file.
+    audio_offset = float((meta.get("audio_provenance") or {}).get("offset_s") or 0.0)
+
     win_start = max(0.0, start - WINDOW_PAD_S)
     win_dur = (end + WINDOW_PAD_S) - win_start
 
     with tempfile.TemporaryDirectory() as tmp:
         wav = Path(tmp) / "window.wav"
         _progress(f"decoding {win_dur:.0f}s window")
-        _decode_window(src, win_start, win_dur, wav)
+        _decode_window(src, win_start + audio_offset, win_dur, wav)
 
         _progress("whisper word timings")
         words = window_words(wav, model_size)
@@ -532,7 +539,7 @@ def cut_quote(episode_id: str, start: float, end: float,
     filename = f"qs_cut_{episode_id}_{int(abs_start)}_{int(abs_end)}.m4a"
     dest = lib_root / "media" / filename
     _progress("cutting clip")
-    cmd = ["ffmpeg", "-y", "-ss", str(abs_start), "-i", str(src),
+    cmd = ["ffmpeg", "-y", "-ss", str(abs_start + audio_offset), "-i", str(src),
            "-t", str(duration)]
     if not report.get("tail_clean") and FADE_MS > 0:
         fade = FADE_MS / 1000.0
@@ -573,6 +580,7 @@ def cut_quote(episode_id: str, start: float, end: float,
                            round(win_start + offset, 3)],
             "caption_alignment": align,
             "caption_alignment_enforced": enforced,
+            "audio_offset_s": audio_offset,
         },
     }
     manifest_path = dest.with_suffix(".words.json")
