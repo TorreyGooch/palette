@@ -392,10 +392,22 @@ where it came from:
 }
 ```
 
-**The two versions do not always share a timeline.** A feed with a pre-roll
-the upload lacks puts every caption timestamp tens of seconds out. Measured on
-Dwarkesh: half the catalogue matches to the second, and the rest cluster at
-30-60s — a fixed pre-roll, not random drift.
+**The two versions do not always share a timeline.** Measured across all 125
+Dwarkesh episodes: 53 match to the second, 55 sit at a constant shift (mostly
+-30 to -60s, the YouTube upload carrying an intro the feed does not), 3 shift
+mid-episode, and 1 could not be fitted. `offset_s` holds the measured shift and
+`cut` applies it to the whisper window and the ffmpeg seek — and to nothing
+else, since `attribution.range` and `source_url_ts` cite the episode as
+published.
+
+Offsets are measured, never inferred from the duration difference: the extra
+time could sit at the head, the tail, or both, and a wrong guess puts the cut
+a minute from the quote while still sounding clean. Two probes per episode, at
+25% and 75%; **if they disagree, ads were inserted mid-episode and no single
+number is right**, so the episode is left on YouTube audio rather than given a
+figure that is correct in one half. Probe agreement within 8s counts as
+constant — tighter than that is below what a 1s search step and whisper's word
+boundaries can resolve (observed spreads were 4-6s, then a gap, then 27-37s).
 
 That is why `qs cut` checks. It compares the stored transcript's text for the
 span against what whisper actually heard and refuses below
