@@ -17,6 +17,7 @@ from .library import (
     create_library, load_library, save_library, is_library,
     new_item, new_palette, media_type, register_media_file,
 )
+from .narration import bind as narration_bind, lay_out as narration_layout
 from .storyboard import (
     DEFAULT_ASPECT, delete_board, derive_frame, list_boards, load_board,
     new_board, new_panel, render_storyboard, save_board, slugify,
@@ -517,38 +518,78 @@ async def export_video_ep(body: dict = Body(...)):
 
 
 # ── Storyboards ───────────────────────────────────────────────────────────────
-# A board is an ordered list of chosen panels, each carrying the note that says
-# why it is there. Boards persist as their own documents (see storyboard.py).
-# Panels reference library items by id, so a dropped-in image is imported the
-# same way any other media is and the board keeps only the reference.
+# A board is an ordered list of beats. A beat is one moment of the piece: it can
+# be seen (a library image), heard (a clip and a range of its words), or both.
+# Boards persist as their own documents (see storyboard.py) and reference
+# library items by id, so the board itself holds no media.
+#
+# The words are the spine. Where a beat has narration, its duration comes from
+# the audio rather than from anyone's estimate, which is what lets a visual beat
+# land on a specific word.
 
-def _panel_view(lib: dict, panel: dict) -> dict:
-    """A stored panel plus what the browser needs in order to draw it."""
-    item = _find(lib["items"], panel.get("item_id"))
+def _opt_int(value):
+    """int, or None for anything a form leaves empty."""
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _panel_view(root: Path, lib: dict, panel: dict) -> dict:
+    """A stored beat plus what the browser needs to draw and play it.
+
+    The narration's times and text are read back from the word manifest on
+    every view rather than stored, so they cannot drift from the audio.
+    """
+    item = _find(lib["items"], panel["item_id"]) if panel.get("item_id") else None
     src_id = panel.get("source_item_id")
     source = _find(lib["items"], src_id) if src_id else None
+
+    narration = None
+    stored = panel.get("narration") or None
+    if stored and stored.get("item_id"):
+        clip = _find(lib["items"], stored["item_id"])
+        if clip:
+            narration = narration_bind(root / "media", clip,
+                                       stored.get("word_start"),
+                                       stored.get("word_end"))
+            narration["audio_url"] = f"/api/media/{clip['filename']}"
+            narration["attribution"] = clip.get("attribution")
+            narration["missing"] = False
+        else:
+            narration = {**stored, "missing": True}
+
     return {**panel,
             "image_url": f"/api/media/{item['filename']}" if item else None,
             "title": item.get("title") if item else None,
-            # The image can be deleted from the library while a board still
-            # points at it; say so rather than rendering a silent blank.
-            "missing": item is None,
+            # A beat can be heard and not seen. Only call it missing when it
+            # names an image that has gone, never when it never had one.
+            "missing": panel.get("item_id") is not None and item is None,
+            "narration": narration,
             "source_title": source.get("title") if source else None,
             "source_fps": source.get("fps") if source else None}
 
 
 def _clean_panels(lib: dict, panels) -> list:
-    """Normalise incoming panels, deriving the frame number where possible.
+    """Normalise incoming beats, deriving what a client must not assert.
 
-    The frame is computed from timecode and the source's rate rather than
-    trusted from the client: it is only meaningful against that rate, and a
-    hand-typed one goes stale the moment the timecode is nudged.
+    A beat needs a visual or a narration, not both — requiring the image is
+    what made a quote with no picture impossible to write down.
+
+    Two things are derived rather than trusted. The frame, because it is only
+    meaningful against the source's rate. And the narration's times, of which
+    only the *inputs* are stored — which clip, which words — so that the times
+    are re-read from the word manifest instead of copied and left to rot.
     """
     out = []
     for p in panels or []:
-        item_id = p.get("item_id")
-        if not item_id:
-            continue
+        item_id = p.get("item_id") or None
+        stored = p.get("narration") or {}
+        narration_id = stored.get("item_id") or None
+        if not item_id and not narration_id:
+            continue        # neither seen nor heard: not a beat
         tc = p.get("timecode")
         tc = float(tc) if tc not in (None, "") else None
         src = p.get("source_item_id") or None
@@ -559,13 +600,25 @@ def _clean_panels(lib: dict, panels) -> list:
             derived = derive_frame(tc, (source or {}).get("fps"))
             if derived is not None:
                 frame = derived
+        narration = None
+        if narration_id:
+            narration = {"item_id": narration_id,
+                         "word_start": _opt_int(stored.get("word_start")),
+                         "word_end": _opt_int(stored.get("word_end"))}
         out.append({"id": p.get("id") or str(uuid.uuid4()),
                     "item_id": item_id,
                     "note": p.get("note") or "",
                     "source_item_id": src,
                     "timecode": tc,
-                    "frame": frame})
+                    "frame": frame,
+                    "narration": narration})
     return out
+
+
+def _board_view(root: Path, lib: dict, board: dict) -> dict:
+    """A board with every beat enriched, plus where each one falls in time."""
+    beats = [_panel_view(root, lib, p) for p in board.get("panels", [])]
+    return {**board, "panels": beats, "timeline": narration_layout(beats)}
 
 
 def _require_board(root: Path, bid: str) -> dict:
@@ -594,8 +647,7 @@ def storyboard_get(bid: str):
     root = _root()
     board = _require_board(root, bid)
     lib = load_library(root)
-    return {**board,
-            "panels": [_panel_view(lib, p) for p in board.get("panels", [])]}
+    return _board_view(root, lib, board)
 
 
 @app.patch("/api/storyboards/{bid}")
@@ -614,7 +666,7 @@ def storyboard_update(bid: str, body: dict = Body(...)):
     if "panels" in body:
         board["panels"] = _clean_panels(lib, body["panels"])
     save_board(root, board)
-    return {**board, "panels": [_panel_view(lib, p) for p in board["panels"]]}
+    return _board_view(root, lib, board)
 
 
 @app.delete("/api/storyboards/{bid}")
@@ -636,13 +688,18 @@ def storyboard_add_panels(bid: str, body: dict = Body(...)):
     lib = load_library(root)
     added = 0
     for iid in body.get("item_ids") or []:
-        if not _find(lib["items"], iid):
+        item = _find(lib["items"], iid)
+        if not item:
             continue
-        board["panels"].append(new_panel(iid))
+        # What the item *is* decides which half of the beat it fills. Adding a
+        # cut quote should give you a beat that speaks, not a blank picture.
+        if item.get("type") == "audio":
+            board["panels"].append(new_panel(narration={"item_id": iid}))
+        else:
+            board["panels"].append(new_panel(iid))
         added += 1
     save_board(root, board)
-    return {**board, "added": added,
-            "panels": [_panel_view(lib, p) for p in board["panels"]]}
+    return {**_board_view(root, lib, board), "added": added}
 
 
 @app.post("/api/storyboards/{bid}/render")
@@ -653,15 +710,30 @@ def storyboard_render(bid: str, body: dict = Body(...)):
 
     panels = []
     for p in board.get("panels", []):
-        item = _find(lib["items"], p.get("item_id"))
+        item = _find(lib["items"], p["item_id"]) if p.get("item_id") else None
         src_id = p.get("source_item_id")
         source = _find(lib["items"], src_id) if src_id else None
+
+        # A beat that speaks renders its words, so the board reads as a script
+        # rather than as a grid with holes in it.
+        stored = p.get("narration") or {}
+        quote = speaker = None
+        if stored.get("item_id"):
+            clip = _find(lib["items"], stored["item_id"])
+            if clip:
+                bound = narration_bind(root / "media", clip,
+                                       stored.get("word_start"),
+                                       stored.get("word_end"))
+                quote = bound.get("text")
+                speaker = (clip.get("attribution") or {}).get("person")
+
         panels.append({
             "image": (root / "media" / item["filename"]) if item else None,
+            "quote": quote,
             "note": p.get("note") or "",
             "timecode": p.get("timecode"),
             "frame": p.get("frame"),
-            "source_title": source.get("title") if source else None,
+            "source_title": (source.get("title") if source else None) or speaker,
         })
     if not panels:
         raise HTTPException(400, "Board has no panels")

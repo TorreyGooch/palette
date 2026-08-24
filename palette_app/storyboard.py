@@ -30,6 +30,8 @@ BG = (16, 16, 16)
 PANEL_BG = (8, 8, 8)
 RULE = (52, 52, 52)
 NOTE_FG = (222, 222, 222)
+QUOTE_FG = (232, 226, 205)
+QUOTE_RULE = (120, 110, 80)
 META_FG = (255, 255, 80)
 TITLE_FG = (245, 245, 245)
 MISSING_FG = (150, 90, 90)
@@ -55,8 +57,11 @@ def slugify(name: str) -> str:
     return s[:60] or "storyboard"
 
 
-def new_panel(item_id: str, *, note: str = "", source_item_id: Optional[str] = None,
-              timecode: Optional[float] = None, frame: Optional[int] = None) -> dict:
+def new_panel(item_id: Optional[str] = None, *, note: str = "",
+              source_item_id: Optional[str] = None,
+              timecode: Optional[float] = None, frame: Optional[int] = None,
+              narration: Optional[dict] = None) -> dict:
+    """One beat of a piece: seen, heard, or both — but at least one of them."""
     return {
         "id": str(uuid.uuid4()),
         "item_id": item_id,
@@ -64,6 +69,7 @@ def new_panel(item_id: str, *, note: str = "", source_item_id: Optional[str] = N
         "source_item_id": source_item_id,
         "timecode": timecode,
         "frame": frame,
+        "narration": narration,
     }
 
 
@@ -214,8 +220,12 @@ def render_storyboard(
 ) -> dict:
     """Compose an ordered, annotated board into one image.
 
-    `panels` are dicts of {image: Path|None, note: str, timecode, frame,
-    source_title}. A panel whose file has gone missing renders as a marked
+    `panels` are dicts of {image: Path|None, quote: str|None, note: str,
+    timecode, frame, source_title}.
+
+    A beat that is heard and not seen has no image and renders as a quote card,
+    because the words are the spine and a beat carrying only words is a normal
+    beat, not a hole. A beat whose image file has gone renders as a marked
     placeholder rather than aborting the board - losing one frame should not
     cost the notes written on all the others.
     """
@@ -279,6 +289,7 @@ def render_storyboard(
 
             draw.rectangle([x, y, x + tw - 1, y + th - 1], fill=PANEL_BG)
             image_path = panel.get("image")
+            quote = (panel.get("quote") or "").strip()
             drawn = False
             if image_path and Path(image_path).exists():
                 try:
@@ -290,9 +301,26 @@ def render_storyboard(
                     drawn = True
                 except Exception:
                     drawn = False
-            if not drawn:
+            # An image that was asked for and could not be shown is always
+            # worth reporting, even when a quote carries the beat anyway.
+            if image_path and not drawn:
                 missing.append(idx + 1)
-                label = "image unavailable"
+            if not drawn and quote:
+                lines = wrap_text('"' + quote + '"', tw - 3 * gap,
+                                  lambda s: width_of(s, note_font))
+                shown = lines[:max(1, int((th - gap) // note_h))]
+                qy = y + max(gap, (th - len(shown) * note_h) // 2)
+                draw.rectangle([x + gap, qy - 4, x + gap + 2,
+                                qy + len(shown) * note_h], fill=QUOTE_RULE)
+                for line in shown:
+                    draw.text((x + 2 * gap, qy), line, fill=QUOTE_FG,
+                              font=note_font)
+                    qy += note_h
+                drawn = True
+            if not drawn:
+                if not image_path:
+                    missing.append(idx + 1)
+                label = "image unavailable" if image_path else "empty beat"
                 draw.text((x + (tw - width_of(label, meta_font)) / 2,
                            y + th / 2 - meta_h / 2),
                           label, fill=MISSING_FG, font=meta_font)
