@@ -174,7 +174,7 @@ The corpus is a plain folder, so copy it over the tailnet. From the
 Windows machine:
 
 ```powershell
-scp -r "C:\Users\torre\Documents\palette\Library" torrey@100.102.79.115:/path/to/palette-library
+scp -r "C:\Users\torre\PaletteLibrary" torrey@100.102.79.115:/path/to/palette-library
 ```
 
 Only `quotesource/episodes/` and `quotesource/sources.yaml` are
