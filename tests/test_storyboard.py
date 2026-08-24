@@ -123,6 +123,29 @@ def test_save_stamps_modified(library):
     assert board["modified"] != "2001-01-01T00:00:00"
 
 
+def test_reading_boards_does_not_create_the_folder(library):
+    """A GET must not write. Visiting the page used to grow a directory."""
+    assert sb.list_boards(library) == []
+    assert not (library / "storyboards").exists()
+
+
+def test_opening_a_missing_board_does_not_create_the_folder(library):
+    assert sb.load_board(library, "0e5d1f2a-0000-0000-0000-000000000000") is None
+    assert not (library / "storyboards").exists()
+
+
+def test_deleting_a_missing_board_does_not_create_the_folder(library):
+    assert sb.delete_board(library, "0e5d1f2a-0000-0000-0000-000000000000") is False
+    assert not (library / "storyboards").exists()
+
+
+def test_saving_is_what_creates_the_folder(library):
+    assert not (library / "storyboards").exists()
+    sb.save_board(library, sb.new_board("First"))
+    assert (library / "storyboards").is_dir()
+    assert len(sb.list_boards(library)) == 1
+
+
 # ── small pure pieces ─────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("name,expected", [

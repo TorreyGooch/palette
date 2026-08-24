@@ -38,9 +38,15 @@ MISSING_FG = (150, 90, 90)
 # -- Board storage ------------------------------------------------------------
 
 def boards_dir(root: Path) -> Path:
-    d = root / BOARDS_DIRNAME
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """Where a library keeps its boards. Deliberately does not create it.
+
+    This is on the read path too - listing boards, opening one and deleting
+    one all resolve through here. A GET that quietly makes a folder in
+    someone's library is a side effect nobody asked for: merely visiting the
+    Storyboard page was enough to grow a storyboards/ directory. Only
+    save_board creates it, because only save_board has something to put in it.
+    """
+    return root / BOARDS_DIRNAME
 
 
 def slugify(name: str) -> str:
@@ -82,8 +88,10 @@ def board_path(root: Path, bid: str) -> Path:
 
 def save_board(root: Path, board: dict) -> dict:
     board["modified"] = datetime.now().isoformat()
-    board_path(root, board["id"]).write_text(
-        json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
+    path = board_path(root, board["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(board, indent=2, ensure_ascii=False),
+                    encoding="utf-8")
     return board
 
 
@@ -108,7 +116,10 @@ def delete_board(root: Path, bid: str) -> bool:
 def list_boards(root: Path) -> list:
     """Summaries only, newest edit first - the index never loads note text."""
     out = []
-    for p in sorted(boards_dir(root).glob("*.json")):
+    d = boards_dir(root)
+    if not d.is_dir():
+        return out
+    for p in sorted(d.glob("*.json")):
         try:
             b = json.loads(p.read_text(encoding="utf-8"))
         except ValueError:
