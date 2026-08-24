@@ -35,6 +35,7 @@
       <li data-page="import">⬇ Import</li>
       <li data-page="clip">✂ Clip</li>
       <li data-page="export">📤 Export</li>
+      <li data-page="storyboard">🗂 Storyboard</li>
       <li data-page="quotes">💬 Quotes</li>
     </ul>
     <div class="sidebar-footer">ref → diffusion</div>
@@ -325,6 +326,115 @@
       </div>
     </div>
 
+    <!-- ── Storyboard page ────────────────────────────────────────────────── -->
+    <div id="page-storyboard" class="page">
+      <div class="page-header">
+        <h2>Storyboard</h2>
+        <span style="font-size:12px;color:var(--muted)" id="sb-save-state"></span>
+      </div>
+      <div class="page-body" style="padding:0;overflow:hidden;height:100%">
+        <div class="split-layout" style="padding:16px;height:100%">
+
+          <div class="split-sidebar">
+            <button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:10px"
+                    onclick="Storyboard.createBoard()">+ New Board</button>
+            <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:10px">Boards</h3>
+            <div id="sb-board-list"></div>
+          </div>
+
+          <div class="split-main">
+
+            <div id="sb-empty">
+              <div class="section-card">
+                <h3>No board open</h3>
+                <p style="font-size:13px;color:var(--muted);line-height:1.6">
+                  A storyboard is an ordered run of chosen panels, each with the note
+                  that says why it is there — unlike a contact sheet, which samples
+                  the whole video whether or not a frame means anything.
+                </p>
+                <p style="font-size:13px;color:var(--muted);line-height:1.6">
+                  Create a board, drop images onto it, write a note under each, then
+                  render the lot as a single PNG.
+                </p>
+              </div>
+            </div>
+
+            <div id="sb-editor" class="hidden">
+
+              <div class="section-card">
+                <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
+                  <input type="text" id="sb-name" placeholder="Board name" style="flex:1"
+                         oninput="Storyboard.renameBoard(this.value)">
+                  <span style="font-size:12px;color:var(--muted)" id="sb-count"></span>
+                  <button class="btn btn-sm btn-danger" onclick="Storyboard.deleteBoard()">Delete board</button>
+                </div>
+
+                <div id="sb-drop-zone" class="drop-zone">
+                  <div style="font-size:13px">Drop images here to add panels — or click to browse</div>
+                  <div style="font-size:11px;color:var(--muted);margin-top:4px">
+                    Dropped files are imported into the library, then appended to the board
+                  </div>
+                </div>
+                <input type="file" id="sb-file-input" accept="image/*" multiple class="hidden">
+
+                <div style="margin-top:10px">
+                  <button class="btn btn-sm" id="sb-picker-btn"
+                          onclick="Storyboard.togglePicker()">Add from library</button>
+                </div>
+                <div id="sb-picker" class="hidden" style="margin-top:10px"></div>
+              </div>
+
+              <div id="sb-panels" class="sb-panel-grid"></div>
+
+              <div class="section-card">
+                <h3>Render</h3>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px">
+                  <div class="form-group" style="margin:0">
+                    <label>Columns</label>
+                    <input type="number" id="sb-cols" value="3" min="1">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Panel width (px)</label>
+                    <input type="number" id="sb-tile-width" value="360" min="64">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Panel aspect</label>
+                    <select id="sb-aspect">
+                      <option value="1.7777777778">16:9 — widescreen</option>
+                      <option value="2.39">2.39:1 — scope</option>
+                      <option value="1.5">3:2</option>
+                      <option value="1.3333333333">4:3</option>
+                      <option value="1">1:1 — square</option>
+                      <option value="0.5625">9:16 — vertical</option>
+                    </select>
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Padding (px)</label>
+                    <input type="number" id="sb-padding" value="16" min="0">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Max width (px, optional)</label>
+                    <input type="number" id="sb-max-width" placeholder="e.g. 2048">
+                  </div>
+                </div>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:12px">
+                  <input type="checkbox" id="sb-show-title" checked style="accent-color:var(--accent)">
+                  Print the board name across the top
+                </label>
+                <div style="display:flex;align-items:center;gap:14px">
+                  <button class="btn btn-success" id="sb-render-btn" onclick="Storyboard.render()">Render Storyboard</button>
+                  <span style="font-size:12px;color:var(--muted)" id="sb-estimate"></span>
+                </div>
+              </div>
+
+              <div id="sb-render-result"></div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Quotes page ────────────────────────────────────────────────────── -->
     <div id="page-quotes" class="page">
       <div class="page-header">
@@ -381,6 +491,7 @@
 <script src="/static/js/clip.js"></script>
 <script src="/static/js/library.js"></script>
 <script src="/static/js/export.js"></script>
+<script src="/static/js/storyboard.js"></script>
 <script src="/static/js/quotes.js"></script>
 </body>
 </html>

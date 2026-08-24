@@ -17,6 +17,10 @@ from .library import (
     create_library, load_library, save_library, is_library,
     new_item, new_palette, media_type, register_media_file,
 )
+from .storyboard import (
+    DEFAULT_ASPECT, delete_board, derive_frame, list_boards, load_board,
+    new_board, new_panel, render_storyboard, save_board, slugify,
+)
 from .api.download import download_url
 from .api.media import (
     probe, video_thumbnail, image_thumbnail, extract_clip,
@@ -509,6 +513,178 @@ async def export_video_ep(body: dict = Body(...)):
     )
     if not result.get("ok"):
         raise HTTPException(500, f"Video export failed: {result.get('error', 'unknown')}")
+    return {**result, "filename": out_name}
+
+
+# ── Storyboards ───────────────────────────────────────────────────────────────
+# A board is an ordered list of chosen panels, each carrying the note that says
+# why it is there. Boards persist as their own documents (see storyboard.py).
+# Panels reference library items by id, so a dropped-in image is imported the
+# same way any other media is and the board keeps only the reference.
+
+def _panel_view(lib: dict, panel: dict) -> dict:
+    """A stored panel plus what the browser needs in order to draw it."""
+    item = _find(lib["items"], panel.get("item_id"))
+    src_id = panel.get("source_item_id")
+    source = _find(lib["items"], src_id) if src_id else None
+    return {**panel,
+            "image_url": f"/api/media/{item['filename']}" if item else None,
+            "title": item.get("title") if item else None,
+            # The image can be deleted from the library while a board still
+            # points at it; say so rather than rendering a silent blank.
+            "missing": item is None,
+            "source_title": source.get("title") if source else None,
+            "source_fps": source.get("fps") if source else None}
+
+
+def _clean_panels(lib: dict, panels) -> list:
+    """Normalise incoming panels, deriving the frame number where possible.
+
+    The frame is computed from timecode and the source's rate rather than
+    trusted from the client: it is only meaningful against that rate, and a
+    hand-typed one goes stale the moment the timecode is nudged.
+    """
+    out = []
+    for p in panels or []:
+        item_id = p.get("item_id")
+        if not item_id:
+            continue
+        tc = p.get("timecode")
+        tc = float(tc) if tc not in (None, "") else None
+        src = p.get("source_item_id") or None
+        frame = p.get("frame")
+        frame = int(frame) if frame not in (None, "") else None
+        if tc is not None and src:
+            source = _find(lib["items"], src)
+            derived = derive_frame(tc, (source or {}).get("fps"))
+            if derived is not None:
+                frame = derived
+        out.append({"id": p.get("id") or str(uuid.uuid4()),
+                    "item_id": item_id,
+                    "note": p.get("note") or "",
+                    "source_item_id": src,
+                    "timecode": tc,
+                    "frame": frame})
+    return out
+
+
+def _require_board(root: Path, bid: str) -> dict:
+    try:
+        board = load_board(root, bid)
+    except ValueError:      # not an id at all — same answer as not found
+        board = None
+    if not board:
+        raise HTTPException(404, "Board not found")
+    return board
+
+
+@app.get("/api/storyboards")
+def storyboards_index():
+    return list_boards(_root())
+
+
+@app.post("/api/storyboards")
+def storyboard_create(body: dict = Body(...)):
+    root = _root()
+    return save_board(root, new_board((body.get("name") or "").strip()))
+
+
+@app.get("/api/storyboards/{bid}")
+def storyboard_get(bid: str):
+    root = _root()
+    board = _require_board(root, bid)
+    lib = load_library(root)
+    return {**board,
+            "panels": [_panel_view(lib, p) for p in board.get("panels", [])]}
+
+
+@app.patch("/api/storyboards/{bid}")
+def storyboard_update(bid: str, body: dict = Body(...)):
+    """Rename, and/or replace the panel list wholesale.
+
+    Reorder, edit and delete all arrive as one new list. Panels carry their own
+    ids, so a full replace is the same amount of work as a diff and cannot get
+    out of step with what the user is looking at.
+    """
+    root = _root()
+    board = _require_board(root, bid)
+    lib = load_library(root)
+    if "name" in body:
+        board["name"] = (body["name"] or "").strip() or board["name"]
+    if "panels" in body:
+        board["panels"] = _clean_panels(lib, body["panels"])
+    save_board(root, board)
+    return {**board, "panels": [_panel_view(lib, p) for p in board["panels"]]}
+
+
+@app.delete("/api/storyboards/{bid}")
+def storyboard_delete(bid: str):
+    try:
+        ok = delete_board(_root(), bid)
+    except ValueError:
+        ok = False
+    if not ok:
+        raise HTTPException(404, "Board not found")
+    return {"deleted": bid}
+
+
+@app.post("/api/storyboards/{bid}/panels")
+def storyboard_add_panels(bid: str, body: dict = Body(...)):
+    """Append library items to the end of the board, in the order given."""
+    root = _root()
+    board = _require_board(root, bid)
+    lib = load_library(root)
+    added = 0
+    for iid in body.get("item_ids") or []:
+        if not _find(lib["items"], iid):
+            continue
+        board["panels"].append(new_panel(iid))
+        added += 1
+    save_board(root, board)
+    return {**board, "added": added,
+            "panels": [_panel_view(lib, p) for p in board["panels"]]}
+
+
+@app.post("/api/storyboards/{bid}/render")
+def storyboard_render(bid: str, body: dict = Body(...)):
+    root = _root()
+    board = _require_board(root, bid)
+    lib = load_library(root)
+
+    panels = []
+    for p in board.get("panels", []):
+        item = _find(lib["items"], p.get("item_id"))
+        src_id = p.get("source_item_id")
+        source = _find(lib["items"], src_id) if src_id else None
+        panels.append({
+            "image": (root / "media" / item["filename"]) if item else None,
+            "note": p.get("note") or "",
+            "timecode": p.get("timecode"),
+            "frame": p.get("frame"),
+            "source_title": source.get("title") if source else None,
+        })
+    if not panels:
+        raise HTTPException(400, "Board has no panels")
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_name = f"{slugify(board['name'])}_storyboard_{stamp}.png"
+    out_path = root / "exports" / out_name
+
+    # An explicit empty title drops the header; anything else names the board.
+    title = body.get("title", board.get("name")) or None
+    aspect = body.get("aspect")
+    result = render_storyboard(
+        panels, out_path,
+        title=title,
+        cols=int(body.get("cols", 3)),
+        tile_width=int(body.get("tile_width", 360)),
+        aspect=float(aspect) if aspect else DEFAULT_ASPECT,
+        padding=int(body.get("padding", 16)),
+        max_width=int(body["max_width"]) if body.get("max_width") else None,
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            500, f"Storyboard render failed: {result.get('error', 'unknown')}")
     return {**result, "filename": out_name}
 
 

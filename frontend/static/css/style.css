@@ -876,3 +876,156 @@ video {
 @keyframes server-pulse { 0%,100% { opacity: .3 } 50% { opacity: 1 } }
 
 #q-server-meters span { margin-right: 14px; white-space: nowrap; }
+
+/* ── Storyboard ─────────────────────────────────────────────────────────────
+   The editor grid mirrors the rendered board: a panel, then the note under
+   it, so what you arrange on screen is what comes out of the PNG. */
+
+.sb-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.sb-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color .15s, opacity .15s;
+}
+.sb-panel.dragging { opacity: .4; }
+.sb-panel.drop-target { border-color: var(--accent); }
+.sb-panel.missing { border-color: var(--red); }
+
+.sb-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sb-grip {
+  cursor: grab;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  user-select: none;
+  padding: 2px 4px;
+}
+.sb-grip:active { cursor: grabbing; }
+.sb-num {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 18px;
+}
+.sb-panel-head .btn { padding: 2px 7px; font-size: 11px; }
+
+.sb-thumb {
+  background: #000;
+  border-radius: 4px;
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.sb-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.sb-missing { font-size: 11px; color: var(--red); }
+
+.sb-note {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+}
+.sb-note:focus { outline: none; border-color: var(--accent); }
+
+.sb-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sb-meta select {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  padding: 3px 5px;
+}
+.sb-meta input {
+  width: 62px;
+  font-size: 11px;
+  padding: 3px 5px;
+}
+.sb-frame {
+  font-size: 11px;
+  color: var(--orange);
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+  text-align: right;
+}
+
+/* Library picker */
+.sb-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.sb-pick {
+  position: relative;
+  display: block;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.sb-pick img {
+  width: 100%;
+  height: 68px;
+  object-fit: cover;
+  display: block;
+}
+.sb-pick span {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  padding: 3px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb-pick input {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  accent-color: var(--accent);
+  z-index: 1;
+}
+.sb-pick:has(input:checked) { border-color: var(--accent); }
+
+.drop-zone.busy {
+  opacity: .6;
+  pointer-events: none;
+  border-color: var(--accent);
+}
