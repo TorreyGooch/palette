@@ -5,10 +5,12 @@ Two things live in this repo:
 1. **palette** — web app (`launch.bat`, http://127.0.0.1:7861) for a visual
    reference library: import images/video, carve clips (keyframe workflow),
    tag items, group them into *palettes* (named collections, many-to-many),
+   build *storyboards* (chosen panels, annotated, rendered to one PNG),
    export contact sheets (single, or a paged series covering a whole video)
    and trimmed videos for diffusion workflows. Data lives
    in a user-chosen library folder (`config.json` → `library_path`);
-   `library.json` inside it is the whole database.
+   `library.json` inside it is the media database, and `storyboards/`
+   beside it holds one JSON file per board.
 2. **quotesource (`qs`)** — spoken-word sourcing layer. Maintains a corpus of
    YouTube channels / RSS podcasts with timestamped transcripts, exposes
    search primitives, and stages verified segments onto palettes with
@@ -475,3 +477,72 @@ into tiles, sheets and seconds-per-sheet before you commit. Aim for sheets
 that stay legible — 4×6 at 320 px is ~1.3 k × 1.1 k and around 100–200 KB,
 which reads well and costs little to attach. A five-minute video at one
 tile per 2.5 s is about a dozen sheets.
+
+## Building a storyboard
+
+A contact sheet is mechanical: every Nth frame, whether or not it means
+anything. A **storyboard** is the opposite — a few frames chosen on purpose,
+put in the order that tells the story, each carrying the note that says why
+it is there. The two share a grid and nothing else, which is why Storyboard
+is its own page and `storyboard.py` its own module rather than more
+parameters bolted onto `contact_sheet()`.
+
+Panels come from **images**: drop files onto the board (they import into the
+library like any other media, then append as panels) or check existing
+library images out of the picker. A dropped video is refused rather than
+becoming a blank panel. Reorder by dragging the grip or with the ↑↓ buttons;
+notes autosave after 600 ms. Render produces **one PNG** in `exports/`.
+
+### Boards are documents, not media
+
+A board is one JSON file per board under the library's `storyboards/`, *not*
+an entry in `library.json`. Note text would bloat the media database, and a
+board being edited would otherwise contend with every tag and palette write
+for the same file. Deleting a board leaves its images in the library.
+
+Nothing on the read path creates that folder — only `save_board` does, because
+only `save_board` has something to put in it. A GET that quietly makes a
+directory in someone's library is a side effect nobody asked for.
+
+### What a panel carries
+
+`note` is free text and is the whole point of the format. `source_item_id`
+and `timecode` are optional; supply both and the server **derives** `frame`
+from that video's fps. The frame is never trusted from the client: it is a
+function of the timecode, and a hand-typed one goes stale the moment the
+timecode is nudged. With no source, a typed frame is kept as-is.
+
+The caption under each panel reads `2.  ·  Source Reel  ·  1:23.5  ·  f2505`,
+omitting whatever is not known. Frame 0 and timecode 0 both print — they are
+real values, not missing ones.
+
+```jsonc
+POST   /api/storyboards               {"name": "Cold Open"}
+GET    /api/storyboards               // summaries, newest edit first
+GET    /api/storyboards/{id}          // panels enriched with image_url, titles
+PATCH  /api/storyboards/{id}          {"name": "...", "panels": [...]}
+DELETE /api/storyboards/{id}
+POST   /api/storyboards/{id}/panels   {"item_ids": ["..."]}    // append
+POST   /api/storyboards/{id}/render   {"cols": 3, "tile_width": 360,
+                                       "aspect": 1.7777, "padding": 16,
+                                       "max_width": 2048, "title": "..."}
+```
+
+`PATCH` replaces the panel list **wholesale** — reorder, edit and delete all
+arrive as one new list. Panels carry their own ids, so a full replace costs
+the same as a diff and cannot get out of step with what the user is looking
+at. A panel with no `item_id` is dropped; a blank `timecode` clears rather
+than becoming zero.
+
+Render returns `panels`, `grid`, `width`, `height`, `size_bytes`, `filename`
+and `missing[]`. **Check `missing`.** It lists the 1-based panel numbers whose
+image file had gone; those render as a marked placeholder rather than
+aborting the board, because losing one frame should not cost the notes
+written on all the others. An explicit empty title (`"title": ""`) drops the
+header; omit the field and the board's name is printed across the top.
+
+**Layout worth knowing.** Panels are letterboxed into one uniform box, so a
+9:16 still sits inside a 16:9 frame instead of being stretched. The grid never
+gets wider than it has panels for — two panels at `cols: 3` render two wide,
+not a third of an empty canvas. Row height follows the tallest caption *in
+that row*, so one panel carrying a paragraph does not pad out every other row.
