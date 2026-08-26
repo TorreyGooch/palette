@@ -226,6 +226,36 @@ flag**:
 - If throttling starts: set `QS_DOWNLOAD_RATE=1M` and stop av pulls before
   reaching for anything cleverer.
 
+**Staying anonymous, and knowing when to stop**
+
+Every YouTube request this project makes is unauthenticated — no cookies, no
+OAuth, no API key anywhere in the codebase. A rate limit therefore lands on an
+IP and decays; no account is exposed. **Never add authentication to get past a
+limit** (`--cookies-from-browser` and friends), and never fake a browser user
+agent: both convert a temporary IP annoyance into a real identity attached to
+bulk downloading. When a limit blocks work the answer is to wait.
+
+`qs ingest` throttles in two ways, and both matter:
+
+- The pause between episodes is **jittered** (`SLEEP_BETWEEN_EPISODES` 2.0s,
+  `SLEEP_JITTER` ±0.6), because requests spaced at an exact interval are the
+  clearest automation signature a client can emit. `sleep_interval_requests`
+  is also passed to yt-dlp so one episode's metadata and caption fetches are
+  not fired back to back.
+- After `RATE_LIMIT_STOP` (2) **consecutive** rate-limited episodes the whole
+  run gives up and sets `stopped: "rate_limited"` in its result. Before this
+  existed the loop retried each episode's full `[60, 180, 600]` backoff and
+  then moved to the next one, grinding against a limit that was not going to
+  lift — which is how a soft throttle becomes a hard one. Only a *successful*
+  fetch clears the count: an ordinary failure (no captions on a video) is not
+  evidence that the limit has lifted.
+
+**Check `stopped` before believing a run finished.** `null` means the list was
+worked through; `"rate_limited"` means it stopped early and there is more to
+do. Ingest is resumable and skips what it already has, so picking it up a day
+later costs only the remainder. Roughly 300 caption fetches a day has been the
+observed ceiling.
+
 **Things that will waste your time if you don't know them**
 - A `503` from search means the corpus server is stopped, not broken.
 - `qs` run on the desktop exits 1 and tells you the corpus is elsewhere.

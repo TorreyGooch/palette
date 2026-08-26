@@ -5,10 +5,18 @@ RSS: feedparser; episodes marked needs_transcription (no captions exist).
 
 Idempotent: an episode whose metadata.json exists is skipped, except episodes
 whose caption fetch previously failed (status "captions_pending") which are
-retried. Politely throttled; 429s back off hard.
+retried.
+
+Throttling is deliberate and has two halves. The pause between episodes is
+*jittered*, because a fixed cadence over hundreds of requests is the clearest
+automation signature a client can emit. And a run gives up entirely after a
+few consecutive rate-limited episodes rather than working through the list
+retrying each one, which is how a soft limit gets turned into a hard one.
 """
 import hashlib
 import json
+import os
+import random
 import re
 import time
 from datetime import datetime
@@ -19,7 +27,14 @@ from .paths import episode_dir, ensure_root
 from .transcripts import normalize_captions
 
 SLEEP_BETWEEN_EPISODES = 2.0
+SLEEP_JITTER = 0.6                 # +/- fraction of the pause, so it is not a metronome
 BACKOFF_SCHEDULE = [60, 180, 600]  # seconds, on rate-limit errors
+
+# Consecutive rate-limited episodes before the whole run stops. The per-episode
+# backoff above survives a blip; this is what stops the loop from walking the
+# rest of the channel retrying every episode against a limit that is not going
+# to lift for a while.
+RATE_LIMIT_STOP = 2
 
 # Caption statuses:
 #   captions            - transcript.json from YouTube captions
@@ -55,6 +70,37 @@ def episode_status(ep_dir: Path) -> str:
         src = t.get("transcript_source", "")
         return "whisper" if src == "whisper" else "captions"
     return meta.get("status", "unknown")
+
+
+class RateLimited(Exception):
+    """Every attempt at one episode was refused for rate limiting."""
+
+
+def _pause(base: float | None = None, jitter: float | None = None) -> float:
+    """A jittered pause, in seconds.
+
+    Requests spaced exactly 2.000s apart look like nothing a person has ever
+    done. Spreading them around the mean costs nothing and removes the most
+    obvious tell.
+    """
+    base = SLEEP_BETWEEN_EPISODES if base is None else base
+    jitter = SLEEP_JITTER if jitter is None else jitter
+    if base <= 0:
+        return 0.0
+    spread = max(0.0, min(jitter, 1.0))
+    return max(0.05, random.uniform(base * (1 - spread), base * (1 + spread)))
+
+
+def _request_gap() -> float:
+    """Seconds yt-dlp waits between its own requests within one fetch.
+
+    Without it a single episode fires its metadata and caption requests back
+    to back, so a polite gap *between* episodes still brackets a burst.
+    """
+    try:
+        return float(os.environ.get("QS_DOWNLOAD_SLEEP_S", "1"))
+    except ValueError:
+        return 1.0
 
 
 def _is_rate_limit(exc: Exception) -> bool:
@@ -110,6 +156,7 @@ def _fetch_youtube_episode(source: dict, entry: dict, quiet: bool) -> dict:
         "subtitleslangs": ["en", "en-US", "en-GB", "en-orig"],
         "subtitlesformat": "json3/vtt/best",
         "outtmpl": str(ep_dir / "captions.raw"),
+        "sleep_interval_requests": _request_gap(),
     }
 
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -262,9 +309,14 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
         "too_short": too_short,
         "new": 0, "retried": 0, "skipped": 0, "failed": 0,
         "episodes": [],
+        # None when the list was worked through; "rate_limited" when the run
+        # gave up early. A caller that cannot tell the difference will treat a
+        # throttled run as a complete one.
+        "stopped": None,
     }
 
     processed = 0
+    consecutive_limited = 0
     for entry in entries:
         if limit is not None and processed >= limit:
             break
@@ -279,35 +331,65 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
             if stype == "rss":
                 _fetch_rss_episode(source, entry, quiet)
             else:
-                _fetch_with_backoff(source, entry, quiet)
+                _, hit_limit = _fetch_with_backoff(source, entry, quiet)
+                # An episode that only got through after a 429 still counts:
+                # by then the endpoint has already asked us to slow down.
+                consecutive_limited = consecutive_limited + 1 if hit_limit else 0
             result["retried" if is_retry else "new"] += 1
             result["episodes"].append(entry["episode_id"])
+        except RateLimited as e:
+            consecutive_limited += 1
+            result["failed"] += 1
+            result.setdefault("failures", []).append(
+                {"episode_id": entry["episode_id"], "error": str(e)})
+            print(f"  {entry['episode_id']}  FAILED: {e}", flush=True)
         except Exception as e:
+            # An ordinary failure - no captions on this video, say - is not
+            # evidence of a rate limit, but it is not evidence that one has
+            # lifted either. Leave the count alone: only a fetch that actually
+            # succeeds proves we are being served again. Resetting here would
+            # let an alternating 429 / no-captions channel run forever.
             result["failed"] += 1
             result.setdefault("failures", []).append(
                 {"episode_id": entry["episode_id"], "error": str(e)})
             # failures always print, even with --quiet
             print(f"  {entry['episode_id']}  FAILED: {e}", flush=True)
         processed += 1
+
+        if consecutive_limited >= RATE_LIMIT_STOP:
+            result["stopped"] = "rate_limited"
+            print(f"  stopping: {consecutive_limited} consecutive rate-limited "
+                  f"episodes. Ingest is resumable - try again later.", flush=True)
+            break
+
         if stype != "rss":
-            time.sleep(SLEEP_BETWEEN_EPISODES)
+            time.sleep(_pause())
 
     return result
 
 
 def _fetch_with_backoff(source: dict, entry: dict, quiet: bool):
+    """Fetch one episode, retrying a rate limit. Returns (metadata, hit_limit).
+
+    `hit_limit` says whether any attempt was refused for rate limiting, even
+    if a later one succeeded - the caller needs that to decide whether the run
+    as a whole should stop. Raises RateLimited when every attempt was refused,
+    which is distinct from an ordinary failure and is counted differently.
+    """
     last = None
-    for i, backoff in enumerate([0] + BACKOFF_SCHEDULE):
+    hit_limit = False
+    for backoff in [0] + BACKOFF_SCHEDULE:
         if backoff:
             _log(quiet, f"rate limited; sleeping {backoff}s")
             time.sleep(backoff)
         try:
-            return _fetch_youtube_episode(source, entry, quiet)
+            return _fetch_youtube_episode(source, entry, quiet), hit_limit
         except Exception as e:
             last = e
             if not _is_rate_limit(e):
                 raise
-    raise last
+            hit_limit = True
+    raise RateLimited(str(last))
 
 
 def list_episodes(source_id: str) -> list[dict]:
