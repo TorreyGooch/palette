@@ -16,6 +16,24 @@ Two things live in this repo:
    search primitives, and stages verified segments onto palettes with
    attribution.
 
+## Three roles share this folder
+
+Work here is done by three Claude Code sessions with different jobs. They share
+one working directory, so this file and `.claude/settings.json` load identically
+for all of them — which means **a session has to declare which role it is**;
+nothing can assign it automatically.
+
+| skill | job | works on |
+|---|---|---|
+| `/architect` | the app, the CLI, tests, docs, and this harness | either |
+| `/researcher` | onboarding sources into the corpus | the server |
+| `/storyboarder` | driving the app: search, cut, curate, assemble | the desktop |
+
+**If you are resuming a compacted session, re-invoke your role skill.** The
+brief was loaded into the conversation, so a summary keeps the gist and loses
+the rules — the escalation cases and the definition of done are exactly the
+parts that get compressed away.
+
 ## Read this first: it runs on two machines
 
 **The corpus is not on this machine.** It lives on the GPU server with the
