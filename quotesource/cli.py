@@ -7,6 +7,7 @@ import argparse
 import json
 import re
 import sys
+import time
 
 
 def _out(data, pretty: bool):
@@ -69,6 +70,61 @@ def cmd_sources(args):
         if not ok:
             _fail(f"source '{args.id}' not found")
         _out({"removed": args.id}, args.pretty)
+
+
+def _guest_source_id(person: str) -> str:
+    """A stable source id for one person's scattered appearances."""
+    slug = re.sub(r"[^a-z0-9]+", "_", (person or "").lower()).strip("_")
+    return f"guest_{slug}" if slug else "guest"
+
+
+def cmd_guest(args):
+    """Individually added episodes, grouped by the person worth quoting.
+
+    A guest source exists so `--person` keeps working: search already treats
+    every episode of a source whose `people` list names someone as that
+    person's, so grouping by person rather than by show is what makes these
+    findable later.
+    """
+    from . import registry
+    from .ingest import add_episode, _pause
+
+    if args.action == "list":
+        _out([s for s in registry.list_sources() if s.get("type") == "episodes"],
+             args.pretty)
+        return
+
+    if not args.urls:
+        _fail("guest add requires at least one URL", 2)
+    if not args.person:
+        _fail("guest add requires --person", 2)
+
+    source_id = args.source_id or _guest_source_id(args.person)
+    source = registry.get_source(source_id)
+    if source is None:
+        source = registry.add_source(
+            source_id, f"{args.person} (appearances)", "episodes", "",
+            people=[args.person],
+            notes=args.notes or "Individually added episodes.")
+    elif source.get("type") != "episodes":
+        _fail(f"source '{source_id}' is a {source.get('type')}, not an "
+              f"episodes source; pass --source-id to pick another")
+
+    results, added, failed = [], 0, 0
+    for index, url in enumerate(args.urls):
+        if index:
+            time.sleep(_pause())     # same politeness as a bulk ingest
+        try:
+            row = add_episode(url, source, quiet=args.quiet)
+            results.append(row)
+            added += 0 if row.get("already_had_it") else 1
+        except Exception as e:
+            failed += 1
+            results.append({"url": url, "error": str(e)})
+    _out({"source": source_id, "person": args.person,
+          "added": added, "failed": failed,
+          "next": "run `qs index` then `qs embed` to make these searchable",
+          "episodes": results}, args.pretty)
 
 
 def cmd_ingest(args):
@@ -319,6 +375,8 @@ _NEEDS_CORPUS = {
     "episodes", "index", "embed", "grep", "search", "context",
     "episode-info", "transcribe", "pull", "words", "cut",
 }
+# `ingest` and `guest` are deliberately absent: both *build* a corpus, so
+# refusing to run them when there is not one yet would forbid the first step.
 
 
 def _warn_if_corpus_elsewhere(command: str):
@@ -396,13 +454,24 @@ def main(argv=None):
     p.add_argument("action", choices=["list", "add", "remove"])
     p.add_argument("--id")
     p.add_argument("--name")
-    p.add_argument("--type", choices=["youtube_channel", "youtube_playlist", "rss"])
+    p.add_argument("--type", choices=["youtube_channel", "youtube_playlist",
+                                      "rss", "episodes"])
     p.add_argument("--url")
     p.add_argument("--people", nargs="*", default=None)
     p.add_argument("--notes")
     p.add_argument("--min-duration", default=None,
                    help="skip anything shorter, e.g. 30m or 1800; stored on the source")
     p.set_defaults(func=cmd_sources)
+
+    p = sub.add_parser("guest", parents=[shared],
+                       help="add single episodes by URL, grouped by person")
+    p.add_argument("action", choices=["add", "list"])
+    p.add_argument("urls", nargs="*", help="YouTube video URLs (or bare ids)")
+    p.add_argument("--person", help="who this is worth quoting for")
+    p.add_argument("--source-id", help="override the derived guest_<person> id")
+    p.add_argument("--notes")
+    p.add_argument("--quiet", action="store_true", help="suppress per-episode logging")
+    p.set_defaults(func=cmd_guest)
 
     p = sub.add_parser("ingest", help="fetch episode metadata and captions", parents=[shared])
     p.add_argument("source_id", nargs="?")

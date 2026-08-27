@@ -110,6 +110,82 @@ def _is_rate_limit(exc: Exception) -> bool:
 
 # ── YouTube ───────────────────────────────────────────────────────────────────
 
+_YT_URL_ID = re.compile(
+    r"(?:v=|/shorts/|youtu\.be/|/embed/|/live/)([A-Za-z0-9_-]{11})")
+
+
+def youtube_id(url: str) -> str | None:
+    """The 11-character video id inside a YouTube URL, or None.
+
+    Parsed rather than resolved over the network: the id is the one thing a
+    URL always carries, and asking YouTube for it would spend a request to
+    learn something already in our hands.
+    """
+    text = (url or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", text):
+        return text
+    match = _YT_URL_ID.search(text)
+    return match.group(1) if match else None
+
+
+def add_episode(url: str, source: dict, quiet: bool = False) -> dict:
+    """Ingest one episode by URL, captions and metadata only.
+
+    This exists for guests. Someone worth quoting often appears once on a show
+    whose other three hundred episodes are irrelevant, and ingesting the whole
+    channel to reach one conversation spends bandwidth, disk and rate limit for
+    nothing. Goes through the same backoff path as a bulk ingest, so it obeys
+    the same politeness.
+    """
+    ensure_root()
+    episode_id = youtube_id(url)
+    if not episode_id:
+        raise ValueError(f"not a YouTube video URL: {url!r}")
+
+    ep_dir = episode_dir(source["id"], episode_id)
+    existing = load_metadata(ep_dir)
+    if existing and existing.get("status") != "captions_pending":
+        return {"source": source["id"], "episode_id": episode_id,
+                "title": existing.get("title"),
+                "status": existing.get("status"),
+                "already_had_it": True, "rate_limited": False}
+
+    entry = {"episode_id": episode_id,
+             "url": f"https://www.youtube.com/watch?v={episode_id}",
+             "title": "", "duration": None}
+    meta, hit_limit = _fetch_with_backoff(source, entry, quiet)
+    return {"source": source["id"], "episode_id": episode_id,
+            "title": meta.get("title"),
+            "show": meta.get("uploader"),
+            "upload_date": meta.get("upload_date"),
+            "duration": meta.get("duration"),
+            "status": meta.get("status"),
+            "already_had_it": False, "rate_limited": hit_limit}
+
+
+def _enumerate_episodes_source(source: dict) -> list[dict]:
+    """What is already on disk for a hand-curated source.
+
+    An `episodes` source has no feed to walk - it is whatever was added to it
+    one URL at a time. Listing the contents lets `qs ingest` retry anything
+    whose caption fetch failed, which is what it does for every other type.
+    """
+    out = []
+    base = ensure_root() / "episodes" / source["id"]
+    if not base.is_dir():
+        return out
+    for ep_dir in sorted(p for p in base.iterdir() if p.is_dir()):
+        meta = load_metadata(ep_dir) or {}
+        out.append({
+            "episode_id": ep_dir.name,
+            "url": meta.get("url") or
+                   f"https://www.youtube.com/watch?v={ep_dir.name}",
+            "title": meta.get("title") or "",
+            "duration": meta.get("duration"),
+        })
+    return out
+
+
 def _enumerate_youtube(url: str, source_type: str) -> list[dict]:
     import yt_dlp
 
@@ -279,6 +355,8 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
         entries = _enumerate_youtube(source["url"], stype)
     elif stype == "rss":
         entries = _enumerate_rss(source["url"])
+    elif stype == "episodes":
+        entries = _enumerate_episodes_source(source)
     else:
         raise ValueError(f"unknown source type: {stype}")
 

@@ -2,18 +2,22 @@
 import re
 from .paths import sources_path, ensure_root
 
-VALID_TYPES = ("youtube_channel", "youtube_playlist", "rss")
+VALID_TYPES = ("youtube_channel", "youtube_playlist", "rss", "episodes")
 
 TEMPLATE = """\
 # quotesource registry. Edit freely; `qs sources` commands keep this shape.
 # Each source:
 #   - id: short-slug            # unique, filesystem-safe
 #     name: Human Name
-#     type: youtube_channel | youtube_playlist | rss
-#     url: https://...
+#     type: youtube_channel | youtube_playlist | rss | episodes
+#     url: https://...          # not needed for an `episodes` source
 #     people: [Host Name]       # default speaker metadata for the source
 #     min_duration: 1800        # optional; skip anything shorter (seconds)
 #     notes: optional free text
+#
+# An `episodes` source is a bag of individually added videos rather than a
+# feed - see `qs guest add`. It has nothing to enumerate, so `qs ingest` on one
+# only retries episodes already on disk whose caption fetch failed.
 sources: []
 """
 

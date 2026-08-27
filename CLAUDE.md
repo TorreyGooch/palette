@@ -107,6 +107,7 @@ overrides the search.
 |---|---|
 | `qs sources list\|add\|remove` | registry (`sources.yaml` at the data root, hand-editable) |
 | `qs ingest <source-id> [--limit N] [--min-duration 30m]` / `--all` | fetch episode metadata + captions; idempotent, throttled, resumable |
+| `qs guest add <url>... --person X` / `qs guest list` | add single episodes by URL, grouped by person |
 | `qs episodes <source-id>` | per-episode transcript status |
 | `qs status` | corpus totals, index size, embedding coverage, disk |
 | `qs index [--rebuild]` | chunk + FTS index; incremental (transcript-hash keyed) |
@@ -136,6 +137,35 @@ mirror.** They cover `status`, `search`, `words`, `context`, `pull`, `cut`,
 or remote, and — unlike the CLI — put the resulting clip in *this* machine's
 library. Reach for the CLI only for corpus maintenance: `ingest`, `index`,
 `embed`, `transcribe`.
+
+## Guests: one episode at a time
+
+The people most worth quoting are often **guests**, not hosts. They appear once
+on a show whose other three hundred episodes are irrelevant, and ingesting that
+whole channel to reach one conversation spends bandwidth, disk and rate limit
+for nothing.
+
+```bash
+qs guest add https://youtu.be/<id> https://youtu.be/<id2>     --person "John Vervaeke"
+qs index && qs embed          # both incremental; search needs both
+```
+
+That creates (or reuses) a source of type **`episodes`** — `guest_john_vervaeke`
+by default — with `people: [John Vervaeke]`. Grouping by *person* rather than by
+show is the whole point: `_person_episode_filter` already treats every episode
+of a source whose `people` list names someone as that person's, so
+`--person "John Vervaeke"` finds these afterwards with no other change.
+
+- An `episodes` source has **no URL and nothing to enumerate**. `qs ingest` on
+  one only retries episodes already on disk whose caption fetch failed.
+- The id is parsed out of the URL rather than resolved over the network, so a
+  bad URL costs nothing. `watch?v=`, `youtu.be/`, `/shorts/`, `/embed/`,
+  `/live/` and bare ids all work.
+- Adding the same episode twice is free — it is skipped unless the previous
+  attempt left it `captions_pending`.
+- It goes through the same backoff as a bulk ingest, so it inherits the jitter
+  and reports `rate_limited` rather than opening a second unthrottled path.
+- `uploader` records which show it came from, at no extra cost.
 
 ## Investigation patterns
 
