@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git branch:*)",
+      "Bash(git show:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(py.exe -m pytest:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(curl.exe -s http://127.0.0.1:7861/:*)",
+      "Bash(curl -s http://127.0.0.1:7861/:*)"
+    ],
+    "deny": [
+      "Write(C:\\Users\\torre\\PaletteLibrary\\**)",
+      "Edit(C:\\Users\\torre\\PaletteLibrary\\**)"
+    ]
+  }
+}
