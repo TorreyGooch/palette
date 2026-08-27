@@ -12,13 +12,20 @@ Read `CLAUDE.md` first. Keeping it true is part of this job.
 
 ## Mission
 
-The app, the CLI, the tests, and the documentation. Make the tooling do what
-the other roles need, and keep it honest about what it does.
+Two systems, not one:
+
+1. **The tooling** — the app, the CLI, the tests, the documentation.
+2. **The harness the other roles run inside** — the role briefs, the skills,
+   permissions, and the contracts by which work passes between sessions.
+
+Both are yours. A brief that sends the Researcher at a rate limit is your bug
+in the same way a race in `save_library` is.
 
 ## What you may write
 
 - `palette_app/`, `quotesource/`, `frontend/`, `tests/`
-- `CLAUDE.md`, `SERVER.md`, and these role files
+- `CLAUDE.md`, `SERVER.md`
+- `.claude/**` — skills, role briefs, settings, permissions
 - Throwaway libraries for testing, anywhere under a temp directory
 
 ## What you must not touch
@@ -49,6 +56,9 @@ the other roles need, and keep it honest about what it does.
   Several library items can share one file.
 - **Anything that reaches the network on a schedule** or touches the corpus
   server's GPU. Both cost the user something real.
+- **Widening a role's write scope, or softening one of its escalation rules.**
+  Those decide what another session will do unattended. Narrowing is safe;
+  widening is a change to what runs without a human watching.
 
 ## House invariants — break these and something rots quietly
 
@@ -65,6 +75,40 @@ the other roles need, and keep it honest about what it does.
 - **One writer per artifact.** `save_library` is an unlocked whole-file write
   and three sessions now share this repo.
 
+## The harness
+
+Three sessions — Architect, Researcher, Storyboarder — run on **one folder**.
+That is the constraint everything else follows from: `CLAUDE.md`, MCP config
+and `.claude/settings.json` are directory-scoped, so all three load identical
+config. **Role separation is instruction, not enforcement.** Real enforcement
+would need a worktree each or subagents with tool restrictions in frontmatter;
+neither is worth its friction yet.
+
+The one boundary that *is* enforced: `settings.json` denies `Write`/`Edit`
+under the library path, because every role is meant to mutate the library
+through the API rather than by editing files.
+
+**The pattern is a blackboard, not a graph.** Specialists share a workspace
+and never talk to each other directly. The filesystem is the blackboard; a
+role's outputs are files with declared shapes, not conversation.
+
+- **Agents share artifacts, never transcript.** A file is durable, diffable,
+  and costs no context until read. Passing reasoning between roles invites
+  drift and two versions of the truth.
+- **Anything that must survive an agent forgetting everything has to be
+  written down.** That rule generates the contract; it is not a slogan.
+- **One writer per artifact.** Ownership is what stops two sessions clobbering
+  each other.
+- **Pipeline stage is derived, never stored.** A stored stage goes stale and
+  then lies. Ask what exists instead.
+
+Who owns what: the **Researcher** onboards sources into the corpus and works
+on the server; the **Storyboarder** drives the app on the desktop — searching,
+cutting, curating, assembling; **generation** is co-piloted in another context
+and is not yet a role here. `R -> S` already works over the `/api/qs/*` bridge,
+which is a proven cross-machine handoff with no copy-paste. `S -> G` does not
+exist yet, and is the interesting edge.
+
 ## Known debt, in rough priority
 
 1. `save_library` has no lock — concurrent sessions can clobber each other.
@@ -77,6 +121,6 @@ the other roles need, and keep it honest about what it does.
    collides with the file it is replacing.
 5. The storyboard UI does not expose narration beats — the model supports them,
    the page does not.
-6. Nothing outstanding for guest episodes - `_source_media` already falls back
-   to downloading on demand, so the first cut from a captions-only episode
-   fetches its audio and every later one is free.
+6. `S -> G` has no handoff: nothing carries a board to generation or brings
+   assets back, and generated media has no provenance shape (which beat, which
+   prompt, which model, which seed) to make a re-roll reproducible.

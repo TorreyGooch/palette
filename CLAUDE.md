@@ -564,13 +564,41 @@ Nothing on the read path creates that folder — only `save_board` does, because
 only `save_board` has something to put in it. A GET that quietly makes a
 directory in someone's library is a side effect nobody asked for.
 
-### What a panel carries
+### A beat is seen, heard, or both
 
-`note` is free text and is the whole point of the format. `source_item_id`
-and `timecode` are optional; supply both and the server **derives** `frame`
-from that video's fps. The frame is never trusted from the client: it is a
-function of the timecode, and a hand-typed one goes stale the moment the
-timecode is nudged. With no source, a typed frame is kept as-is.
+A board's `panels` are **beats**: one moment of the piece. A beat needs a
+visual (a library image) **or** a narration (a clip and a range of its words) —
+not both, but at least one. Requiring the image is what once made a quote with
+no picture impossible to write down, and that is the wrong shape for an essay
+built from other people's words, where the argument's spine is what is *said*
+and the pictures attach to it.
+
+`note` is free text and is the whole point of the format.
+
+**Narration.** `narration: {"item_id": ..., "word_start": N, "word_end": M}`
+names a staged clip and a span of its words. Only those three inputs are
+stored. The times and the text are re-read from the clip's `.words.json`
+manifest on **every** view, so they cannot drift from the audio the way a
+copied number would — send a `duration` and it will be ignored. Omit the
+bounds and you get the whole clip; out-of-range or reversed indices are
+clamped rather than refused.
+
+Word indices rather than seconds, because they survive a re-cut of the same
+quote and mean something to a person: *from "lobster" to "antidepressants"*.
+
+A clip with no manifest still binds — `qs pull` writes no sidecar, only
+`qs cut` does — and comes back as `precision: "clip"` covering the whole file.
+
+**Visual.** `source_item_id` and `timecode` are optional; supply both and the
+server **derives** `frame` from that video's fps. The frame is never trusted
+from the client: it is a function of the timecode, and a hand-typed one goes
+stale the moment the timecode is nudged. With no source, a typed frame is
+kept as-is.
+
+**Timing comes from the words.** A board's response carries a `timeline`
+laying beats end to end on their narration. A beat with no narration has no
+duration of its own and holds at the current position rather than inventing
+one.
 
 The caption under each panel reads `2.  ·  Source Reel  ·  1:23.5  ·  f2505`,
 omitting whatever is not known. Frame 0 and timecode 0 both print — they are
@@ -591,14 +619,23 @@ POST   /api/storyboards/{id}/render   {"cols": 3, "tile_width": 360,
 `PATCH` replaces the panel list **wholesale** — reorder, edit and delete all
 arrive as one new list. Panels carry their own ids, so a full replace costs
 the same as a diff and cannot get out of step with what the user is looking
-at. A panel with no `item_id` is dropped; a blank `timecode` clears rather
-than becoming zero.
+at. A beat with **neither** a visual nor a narration is dropped; a blank
+`timecode` clears rather than becoming zero.
+
+Adding items fills the half of the beat the item's **type** implies: an audio
+item becomes a beat that speaks, anything else a beat that is seen.
+
+A beat that speaks renders as a **quote card** — its words set inside the
+panel box — so a board of pure narration reads as a script rather than a grid
+of holes.
 
 Render returns `panels`, `grid`, `width`, `height`, `size_bytes`, `filename`
-and `missing[]`. **Check `missing`.** It lists the 1-based panel numbers whose
-image file had gone; those render as a marked placeholder rather than
-aborting the board, because losing one frame should not cost the notes
-written on all the others. An explicit empty title (`"title": ""`) drops the
+and `missing[]`. **Check `missing`.** It lists the 1-based beats whose image
+file had gone; those render as a marked placeholder rather than aborting the
+board, because losing one frame should not cost the notes written on all the
+others. A beat that never had an image is *not* missing — but one that asked
+for an image and lost it is reported even when a quote carries the beat
+anyway. An explicit empty title (`"title": ""`) drops the
 header; omit the field and the board's name is printed across the top.
 
 **Layout worth knowing.** Panels are letterboxed into one uniform box, so a
