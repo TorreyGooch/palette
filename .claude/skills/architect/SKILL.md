@@ -77,6 +77,6 @@ the other roles need, and keep it honest about what it does.
    collides with the file it is replacing.
 5. The storyboard UI does not expose narration beats — the model supports them,
    the page does not.
-6. Guest episodes have no *audio* path: `qs guest add` brings in captions, so
-   those episodes are searchable but cannot be cut from until their audio is
-   fetched or linked.
+6. Nothing outstanding for guest episodes - `_source_media` already falls back
+   to downloading on demand, so the first cut from a captions-only episode
+   fetches its audio and every later one is free.
