@@ -91,8 +91,59 @@ def forget_episode(con: sqlite3.Connection, episode_id: str) -> int:
     return dropped
 
 
+PUNCT_PER_WORD = 0.02
+CAPITAL_RATIO = 0.02
+
+
+def _transcript_text(transcript: dict) -> str:
+    """Everything said in an episode, as one string."""
+    return " ".join((seg.get("text") or "")
+                    for seg in (transcript or {}).get("segments", []))
+
+
+def caption_quality(text: str) -> str:
+    """`clean` if a transcript reads as written, `raw` if it reads as machine.
+
+    `transcript_source: manual` looks like a quality signal and is not one:
+    creators routinely upload an unedited auto-caption dump as a manual track,
+    so both extremes turn up inside a single source. One Vervaeke episode
+    gives "Plato is deeply influenced by the natural philosophers" and another
+    gives "my my contention and what i'm going to argue is it's no
+    coincidence" - and both are recorded the same way.
+
+    What actually separates them is punctuation and capitals, because an
+    auto-caption stream has neither. Two ratios rather than one: a transcript
+    can carry sentence marks with no capitals, and lowercase prose with commas
+    is still not something to quote from without checking.
+
+    This is a **verification prompt, not a verdict**. `raw` means read the
+    context before quoting; `clean` means the wording is probably as spoken.
+    Neither replaces `qs context`.
+    """
+    words = (text or "").split()
+    if len(words) < 20:
+        # Too little to judge. Saying "raw" would cry wolf on every short
+        # transcript; saying "clean" would vouch for something unexamined.
+        return "unknown"
+    marks = sum(text.count(c) for c in ".?!")
+    capitals = sum(1 for w in words if w[:1].isupper())
+    if (marks / len(words) >= PUNCT_PER_WORD
+            and capitals / len(words) >= CAPITAL_RATIO):
+        return "clean"
+    return "raw"
+
+
 def _ensure_schema(con: sqlite3.Connection):
     con.executescript(SCHEMA)
+    # CREATE TABLE IF NOT EXISTS will not add a column to a table that already
+    # exists, so the one migration this index has ever needed is done here.
+    # It is safe to do silently precisely because this database is derived:
+    # everything in it can be rebuilt from the transcripts on disk, which is
+    # why caption_quality lives here and not in metadata.json.
+    columns = {row[1] for row in con.execute("PRAGMA table_info(episodes)")}
+    if "caption_quality" not in columns:
+        con.execute("ALTER TABLE episodes ADD COLUMN caption_quality TEXT")
+        con.commit()
 
 
 def chunk_segments(segments: list[dict]) -> list[dict]:
@@ -140,8 +191,14 @@ def build_index(rebuild: bool = False, quiet: bool = True) -> dict:
 
     known = {row[0]: row[1] for row in
              con.execute("SELECT episode_id, transcript_hash FROM episodes")}
+    # Episodes indexed before caption_quality existed. Filled in below without
+    # re-chunking: re-indexing them would mint new chunk ids and strand every
+    # vector already computed for them, which is hours of GPU time to answer a
+    # question the transcript on disk can answer for free.
+    unrated = {row[0] for row in con.execute(
+        "SELECT episode_id FROM episodes WHERE caption_quality IS NULL")}
 
-    stats = {"indexed": 0, "skipped": 0, "removed": 0, "chunks": 0}
+    stats = {"indexed": 0, "skipped": 0, "removed": 0, "chunks": 0, "rated": 0}
     seen = set()
 
     episodes_root = root / "episodes"
@@ -158,6 +215,14 @@ def build_index(rebuild: bool = False, quiet: bool = True) -> dict:
             thash = _transcript_hash(tpath)
             if known.get(episode_id) == thash:
                 stats["skipped"] += 1
+                if episode_id in unrated:
+                    transcript = json.loads(tpath.read_text(encoding="utf-8"))
+                    con.execute(
+                        "UPDATE episodes SET caption_quality=? "
+                        "WHERE episode_id=?",
+                        (caption_quality(_transcript_text(transcript)),
+                         episode_id))
+                    stats["rated"] = stats.get("rated", 0) + 1
                 continue
 
             meta = json.loads(mpath.read_text(encoding="utf-8"))
@@ -167,13 +232,19 @@ def build_index(rebuild: bool = False, quiet: bool = True) -> dict:
             # replace any previous rows for this episode
             forget_episode(con, episode_id)
 
+            # Named rather than positional: a bare VALUES(...) breaks the
+            # moment the table gains a column, which it just did.
             con.execute(
-                "INSERT INTO episodes VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO episodes (episode_id, source_id, title, "
+                "description, upload_date, url, duration, transcript_source, "
+                "transcript_hash, indexed_at, caption_quality) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (episode_id, src_dir.name, meta.get("title"),
                  meta.get("description"), meta.get("upload_date"),
                  meta.get("url"), meta.get("duration"),
                  transcript.get("transcript_source"), thash,
-                 datetime.now().isoformat()))
+                 datetime.now().isoformat(),
+                 caption_quality(_transcript_text(transcript))))
             for c in chunks:
                 cur = con.execute(
                     "INSERT INTO chunks (episode_id, start, end, text) VALUES (?,?,?,?)",

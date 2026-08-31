@@ -101,12 +101,17 @@ def bind(media_dir: Path, item: dict, word_start=None, word_end=None) -> dict:
         "duration": None,
         "text": None,
         "word_count": 0,
+        # How many words the clip has in all, as distinct from how many this
+        # beat uses. Choosing indices needs the ceiling: word_count alone
+        # reads as the total and is not, so "6 - 14 of 9" is what you get.
+        "word_total": 0,
     }
     if not filename:
         return binding
 
     manifest = load_manifest(Path(media_dir) / filename)
     words = word_list(manifest)
+    binding["word_total"] = len(words)
     if words:
         span = summarize(words, word_start, word_end)
         if span:

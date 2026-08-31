@@ -3,7 +3,11 @@ Semantic search (qs search) arrives with the embedding layer.
 
 Hit shape (shared by grep and search):
 {episode_id, source_id, start, end, text, score,
- episode_title, upload_date, url, url_ts}
+ episode_title, upload_date, url, url_ts, caption_quality}
+
+`caption_quality` is `clean`, `raw` or `unknown` - a prompt to verify, not a
+verdict. `raw` means the transcript reads as machine output and the wording
+should be checked with `context` before it is quoted anywhere.
 """
 import json
 import sqlite3
@@ -56,7 +60,7 @@ def _ts_url(url: str, start: float) -> str:
 
 def _hit(row) -> dict:
     (episode_id, source_id, start, end, text, score,
-     title, upload_date, url) = row
+     title, upload_date, url, quality) = row
     return {
         "episode_id": episode_id,
         "source_id": source_id,
@@ -68,6 +72,9 @@ def _hit(row) -> dict:
         "upload_date": upload_date,
         "url": url,
         "url_ts": _ts_url(url, start),
+        # Whether this wording is worth trusting. transcript_source says who
+        # uploaded the captions, which turns out not to answer that.
+        "caption_quality": quality or "unknown",
     }
 
 
@@ -80,7 +87,7 @@ def grep(terms: str, source=None, person=None, after=None, before=None,
     sql = f"""
         SELECT c.episode_id, e.source_id, c.start, c.end, c.text,
                -bm25(chunks_fts) AS score,
-               e.title, e.upload_date, e.url
+               e.title, e.upload_date, e.url, e.caption_quality
         FROM chunks_fts
         JOIN chunks c ON c.id = chunks_fts.rowid
         JOIN episodes e ON e.episode_id = c.episode_id

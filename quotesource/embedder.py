@@ -270,7 +270,7 @@ def semantic_search(query: str, source=None, person=None, after=None,
     for cid, score in top_ids:
         row = con.execute("""
             SELECT c.episode_id, e.source_id, c.start, c.end, c.text, ?,
-                   e.title, e.upload_date, e.url
+                   e.title, e.upload_date, e.url, e.caption_quality
             FROM chunks c JOIN episodes e ON e.episode_id = c.episode_id
             WHERE c.id = ?
         """, (score, cid)).fetchone()

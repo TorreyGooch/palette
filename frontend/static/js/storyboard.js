@@ -227,6 +227,27 @@ const Storyboard = {
     this.queueSave();
   },
 
+  setPrompt(idx, value) {
+    if (!this.board) return;
+    this.board.panels[idx].video_prompt = value;
+    this.queueSave();
+  },
+
+  // Changing the word range changes the quote, its duration, and where every
+  // later beat falls — all of which the server derives. So this re-renders on
+  // the response rather than patching a number in place.
+  setWordStart(idx, value) { this.setWord(idx, 'word_start', value); },
+  setWordEnd(idx, value) { this.setWord(idx, 'word_end', value); },
+
+  setWord(idx, field, value) {
+    if (!this.board) return;
+    const panel = this.board.panels[idx];
+    if (!panel?.narration) return;
+    const n = parseInt(value, 10);
+    panel.narration[field] = (value === '' || isNaN(n)) ? null : n;
+    this.save(true);
+  },
+
   setTimecode(idx, value) {
     if (!this.board) return;
     const n = parseFloat(value);
@@ -367,13 +388,13 @@ const Storyboard = {
           <button class="btn btn-sm btn-danger" title="Remove panel"
                   onclick="Storyboard.removePanel(${i})">✕</button>
         </div>
-        <div class="sb-thumb">
-          ${p.image_url
-            ? `<img src="${esc(p.image_url)}" loading="lazy" alt="${esc(p.title)}">`
-            : '<div class="sb-missing">image unavailable</div>'}
-        </div>
+        <div class="sb-thumb">${this.thumbFor(p)}</div>
+        ${this.narrationBlock(p, i)}
         <textarea class="sb-note" rows="3" placeholder="Shot note — what happens, why it is here"
                   oninput="Storyboard.setNote(${i}, this.value)">${esc(p.note || '')}</textarea>
+        <textarea class="sb-prompt" rows="2"
+                  placeholder="Video prompt — what to generate for this beat"
+                  oninput="Storyboard.setPrompt(${i}, this.value)">${esc(p.video_prompt || '')}</textarea>
         <div class="sb-meta">
           <select onchange="Storyboard.setSource(${i}, this.value)"
                   title="Which video this frame came from">
@@ -388,6 +409,76 @@ const Storyboard = {
             p.frame == null ? '—' : 'f' + p.frame}</span>
         </div>
       </div>`).join('');
+  },
+
+  // A beat can be seen, heard, or merely asked for, and the three failure
+  // modes must not look alike. "image unavailable" used to be shown for all
+  // of them, so a quote-only beat was indistinguishable from a lost file —
+  // which destroys the exact signal `missing[]` exists to carry.
+  thumbFor(p) {
+    if (p.image_url) {
+      return `<img src="${esc(p.image_url)}" loading="lazy" alt="${esc(p.title)}">`;
+    }
+    if (p.missing) return '<div class="sb-missing">image unavailable</div>';
+    if (p.narration) {
+      const text = p.narration.text;
+      return text
+        ? `<div class="sb-quote">${esc(text)}</div>`
+        : '<div class="sb-placeholder">narration — no visual yet</div>';
+    }
+    if ((p.video_prompt || '').trim()) {
+      return '<div class="sb-placeholder">prompt only — nothing shot yet</div>';
+    }
+    return '<div class="sb-placeholder">empty beat</div>';
+  },
+
+  // Where this beat falls in the piece. Laid out server-side from the words,
+  // because the words are the spine — a beat's duration is its narration's.
+  timelineFor(id) {
+    return (this.board?.timeline || []).find(t => t.id === id) || null;
+  },
+
+  narrationBlock(p, i) {
+    const n = p.narration;
+    if (!n) return '';
+    if (n.missing) {
+      return '<div class="sb-narr sb-missing">narration clip is gone from the library</div>';
+    }
+    const at = this.timelineFor(p.id);
+    const who = (n.attribution || {}).person;
+    const show = (n.attribution || {}).episode_title;
+    // Word indices rather than seconds: they survive a re-cut of the same
+    // quote, and they mean something to a person — "lobster" to
+    // "antidepressants" rather than 477.45 to 487.15.
+    return `
+      <div class="sb-narr">
+        <div class="sb-narr-time">
+          <span class="sb-dur">${n.duration == null ? '—' : n.duration.toFixed(1) + 's'}</span>
+          ${at ? `<span class="sb-at" title="Start and end within the piece">${
+            fmtDuration(at.at)} → ${fmtDuration(at.until)}</span>` : ''}
+          <span style="flex:1"></span>
+          <span class="sb-precision" title="${n.precision === 'word'
+            ? 'Times read from the clip word manifest'
+            : 'No word manifest — the beat is the whole clip'}">${esc(n.precision)}</span>
+        </div>
+        ${who || show ? `<div class="sb-attrib">${esc(who || '')}${
+          who && show ? ' · ' : ''}${esc(show || '')}</div>` : ''}
+        <div class="sb-words">
+          <label>words</label>
+          <input type="number" min="0" step="1" placeholder="0"
+                 value="${n.word_start ?? ''}"
+                 title="First word of the quote, by index"
+                 onchange="Storyboard.setWordStart(${i}, this.value)">
+          <span>–</span>
+          <input type="number" min="0" step="1" placeholder="end"
+                 value="${n.word_end ?? ''}"
+                 title="Last word of the quote, by index"
+                 onchange="Storyboard.setWordEnd(${i}, this.value)">
+          <span class="sb-wordcount" title="${n.word_count || 0} of the clip's ${
+            n.word_total || 0} words are in this beat">of ${n.word_total || 0}</span>
+        </div>
+        ${n.audio_url ? `<audio controls preload="none" src="${esc(n.audio_url)}"></audio>` : ''}
+      </div>`;
   },
 
   renderEstimate() {

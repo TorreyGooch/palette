@@ -81,3 +81,45 @@ def test_remote_failure_keeps_its_status(monkeypatch):
     with pytest.raises(HTTPException) as e:
         main.qs_words("NOPE", 1.0, 2.0)
     assert e.value.status_code == 404
+
+
+def test_missing_episode_audio_explains_itself(monkeypatch):
+    """Captions alone cannot give word timings, and the 500 never said so.
+
+    `context` on the same episode answers fine from the transcript on disk, so
+    a bare CUDA-shaped error sent a session looking at the model and the
+    server when the actual gap was one absent audio file.
+    """
+    from palette_app import main
+
+    monkeypatch.delenv("QS_REMOTE", raising=False)
+    monkeypatch.setattr(main, "_remote", lambda: None)
+
+    def no_audio(*a, **k):
+        raise RuntimeError("could not obtain audio for mO9LUWs5M60")
+
+    monkeypatch.setattr("quotesource.cut.word_map", no_audio)
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("mO9LUWs5M60", 1988.0, 2016.0)
+
+    assert raised.value.status_code == 502
+    assert "could not obtain audio" in raised.value.detail
+    assert "qs pull" in raised.value.detail, "it must say what to do"
+
+
+def test_a_genuinely_absent_episode_is_still_a_404(monkeypatch):
+    """Not in the corpus and no audio yet are different answers."""
+    from palette_app import main
+
+    monkeypatch.delenv("QS_REMOTE", raising=False)
+    monkeypatch.setattr(main, "_remote", lambda: None)
+
+    def missing(*a, **k):
+        raise FileNotFoundError("episode 'NOPE' not found")
+
+    monkeypatch.setattr("quotesource.cut.word_map", missing)
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("NOPE", 0.0, 1.0)
+    assert raised.value.status_code == 404

@@ -317,3 +317,30 @@ def test_a_long_quote_does_not_overflow_its_panel(tmp_path):
                                   tmp_path / "b.png", cols=2, tile_width=200)
     assert result["ok"] is True
     assert result["grid"] == "2x1"
+
+
+# ── the ceiling, as distinct from the span ────────────────────────────────────
+
+def test_the_binding_reports_the_clips_total_word_count(library):
+    """Choosing indices needs the ceiling, and word_count is not it.
+
+    word_count is how many words this beat uses. Shown as the total it reads
+    as "6 - 14 of 9", which is nonsense a person then has to decode.
+    """
+    item = audio_item(library, "c.m4a", "a1")
+
+    whole = nr.bind(library / "media", item)
+    assert whole["word_total"] == len(WORDS)
+
+    part = nr.bind(library / "media", item, 1, 3)
+    assert part["word_count"] == 3, "three words in the beat"
+    assert part["word_total"] == len(WORDS), "out of eight in the clip"
+
+
+def test_word_total_is_zero_when_there_is_no_manifest(library):
+    """A clip with no sidecar has no words to count, and must not claim any."""
+    item = audio_item(library, "bare.m4a", "a2", with_manifest=False)
+
+    binding = nr.bind(library / "media", item)
+    assert binding["word_total"] == 0
+    assert binding["precision"] == "clip"

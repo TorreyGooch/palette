@@ -575,8 +575,10 @@ def _panel_view(root: Path, lib: dict, panel: dict) -> dict:
 def _clean_panels(lib: dict, panels) -> list:
     """Normalise incoming beats, deriving what a client must not assert.
 
-    A beat needs a visual or a narration, not both — requiring the image is
-    what made a quote with no picture impossible to write down.
+    A beat needs a visual, a narration, or a prompt — any one of the three.
+    Requiring the image is what made a quote with no picture impossible to
+    write down; requiring an *asset* would do the same to a beat that has yet
+    to be made, which is exactly what a prompt is for.
 
     Two things are derived rather than trusted. The frame, because it is only
     meaningful against the source's rate. And the narration's times, of which
@@ -588,8 +590,9 @@ def _clean_panels(lib: dict, panels) -> list:
         item_id = p.get("item_id") or None
         stored = p.get("narration") or {}
         narration_id = stored.get("item_id") or None
-        if not item_id and not narration_id:
-            continue        # neither seen nor heard: not a beat
+        prompt = (p.get("video_prompt") or "").strip()
+        if not item_id and not narration_id and not prompt:
+            continue        # not seen, not heard, not asked for: not a beat
         tc = p.get("timecode")
         tc = float(tc) if tc not in (None, "") else None
         src = p.get("source_item_id") or None
@@ -611,7 +614,8 @@ def _clean_panels(lib: dict, panels) -> list:
                     "source_item_id": src,
                     "timecode": tc,
                     "frame": frame,
-                    "narration": narration})
+                    "narration": narration,
+                    "video_prompt": prompt})
     return out
 
 
@@ -730,6 +734,7 @@ def storyboard_render(bid: str, body: dict = Body(...)):
         panels.append({
             "image": (root / "media" / item["filename"]) if item else None,
             "quote": quote,
+            "prompt": (p.get("video_prompt") or "").strip() or None,
             "note": p.get("note") or "",
             "timecode": p.get("timecode"),
             "frame": p.get("frame"),
@@ -877,6 +882,18 @@ def qs_words(episode_id: str, start: float, end: float, pad: float = 0.0,
         return word_map(episode_id, start, end, pad=pad, model_size=model)
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        # Word timings are whisper over a window of the *audio*, so an episode
+        # holding only captions has nothing to run on and falls through to an
+        # on-demand fetch. When that fetch fails this used to escape as a bare
+        # 500, which reads as "the endpoint is broken" - and sent a session
+        # looking at the model and the server while `context` on the same
+        # episode answered perfectly well from the transcript on disk.
+        raise HTTPException(
+            502, f"{e}. Word timings need this episode's audio and it is not "
+                 f"stored yet; captions alone are not enough. A `qs pull` on "
+                 f"this episode fetches and keeps it (~50 MB), after which "
+                 f"words and cuts on it cost no network at all.") from None
 
 
 @app.get("/api/qs/context")

@@ -31,6 +31,7 @@ PANEL_BG = (8, 8, 8)
 RULE = (52, 52, 52)
 NOTE_FG = (222, 222, 222)
 QUOTE_FG = (232, 226, 205)
+PROMPT_FG = (150, 150, 165)
 QUOTE_RULE = (120, 110, 80)
 META_FG = (255, 255, 80)
 TITLE_FG = (245, 245, 245)
@@ -60,8 +61,23 @@ def slugify(name: str) -> str:
 def new_panel(item_id: Optional[str] = None, *, note: str = "",
               source_item_id: Optional[str] = None,
               timecode: Optional[float] = None, frame: Optional[int] = None,
-              narration: Optional[dict] = None) -> dict:
-    """One beat of a piece: seen, heard, or both — but at least one of them."""
+              narration: Optional[dict] = None,
+              video_prompt: str = "") -> dict:
+    """One beat of a piece: seen, heard, or asked for — at least one of them.
+
+    `video_prompt` is the third way a beat can exist, and it is the one that
+    points forward: nothing has been shot or found yet, and this says what to
+    make. A beat that is *only* a prompt is the most useful kind, which is why
+    it has to count as a beat rather than being dropped for having no asset.
+
+    It is deliberately not `note`. The note says why this beat is here and is
+    the audit trail that makes a board a decision rather than an asset list;
+    the prompt says what to generate. Merged into one field, the reasoning
+    gets crowded out by craft instructions within a week.
+
+    Authored rather than derived, so storing it is not a derive-don't-store
+    violation - unlike `frame`, there is nothing to recompute it from.
+    """
     return {
         "id": str(uuid.uuid4()),
         "item_id": item_id,
@@ -70,6 +86,7 @@ def new_panel(item_id: Optional[str] = None, *, note: str = "",
         "timecode": timecode,
         "frame": frame,
         "narration": narration,
+        "video_prompt": video_prompt,
     }
 
 
@@ -290,6 +307,7 @@ def render_storyboard(
             draw.rectangle([x, y, x + tw - 1, y + th - 1], fill=PANEL_BG)
             image_path = panel.get("image")
             quote = (panel.get("quote") or "").strip()
+            prompt = (panel.get("prompt") or "").strip()
             drawn = False
             if image_path and Path(image_path).exists():
                 try:
@@ -316,6 +334,19 @@ def render_storyboard(
                     draw.text((x + 2 * gap, qy), line, fill=QUOTE_FG,
                               font=note_font)
                     qy += note_h
+                drawn = True
+            # A beat that is only a prompt has nothing shot yet - that is
+            # the point of it - so it draws what was asked for, marked as an
+            # instruction rather than set as a quote would be.
+            if not drawn and prompt:
+                lines = wrap_text("[ " + prompt + " ]", tw - 3 * gap,
+                                  lambda s: width_of(s, note_font))
+                shown = lines[:max(1, int((th - gap) // note_h))]
+                py_ = y + max(gap, (th - len(shown) * note_h) // 2)
+                for line in shown:
+                    draw.text((x + 2 * gap, py_), line, fill=PROMPT_FG,
+                              font=note_font)
+                    py_ += note_h
                 drawn = True
             if not drawn:
                 if not image_path:

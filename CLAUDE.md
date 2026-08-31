@@ -271,11 +271,14 @@ passing it to `ingest` overrides for one run. Accepts `1800`, `30m`,
   `quotesource` + person, type `audio` or `video`.
 - `qs cut` is the one to use when a quote becomes narration. See
   "Cutting quotes for narration" below — it has the full workflow.
-- Transcript quality is per-source, not uniform: Lex's are human-made and
-  punctuated, Peterson's are mostly YouTube auto-captions with missing
-  punctuation and occasional mis-hearings. 34 episodes have no captions at
-  all and are queued as `needs_transcription`. Verify wording via
-  `context` before presenting anything as a quote.
+- **Transcript quality varies *inside* a source, not only between them.**
+  Every hit carries `caption_quality`: `clean`, `raw` or `unknown`, worked out
+  at index time from punctuation and capitalisation. `raw` means the
+  transcript reads as machine output and the wording must be checked with
+  `context` before it is quoted anywhere; `clean` means it probably matches
+  what was said, and is not an excuse to skip checking. `transcript_source:
+  manual` is **not** a quality signal — creators upload unedited auto-caption
+  dumps as manual tracks, which is the whole reason the heuristic exists.
 - After any `qs ingest`, run `qs index` then `qs embed` (both incremental).
 - **Clip filenames truncate their bounds to whole seconds**, so two cuts a
   fraction of a second apart collide on one name and several library items
@@ -629,14 +632,30 @@ Nothing on the read path creates that folder — only `save_board` does, because
 only `save_board` has something to put in it. A GET that quietly makes a
 directory in someone's library is a side effect nobody asked for.
 
-### A beat is seen, heard, or both
+### A beat is seen, heard, or asked for
 
 A board's `panels` are **beats**: one moment of the piece. A beat needs a
-visual (a library image) **or** a narration (a clip and a range of its words) —
-not both, but at least one. Requiring the image is what once made a quote with
+visual (a library image), a narration (a clip and a range of its words), **or**
+a `video_prompt` — any one of the three, and at least one. Requiring the image is what once made a quote with
 no picture impossible to write down, and that is the wrong shape for an essay
 built from other people's words, where the argument's spine is what is *said*
 and the pictures attach to it.
+
+**Prompt.** `video_prompt` is the third way a beat exists, and the one that
+points forward: nothing has been shot or found yet, and this says what to make.
+A beat that is *only* a prompt is the most useful kind, which is why it counts
+as a beat — requiring an asset would delete it on the next save, silently.
+
+It is deliberately **not** `note`. The note says *why* this beat is here and is
+the audit trail that makes a board a decision rather than an asset list; the
+prompt says *what to generate*. One field for both and the reasoning is crowded
+out by craft instructions within a week. A prompt is authored rather than
+derived, so storing it is not a derive-don't-store violation — there is nothing
+to recompute it from.
+
+A prompt-only beat renders as its text in brackets, in its own colour, so a
+board of them reads as a shot list. It is **not** reported in `missing[]`: no
+image was asked for. One that asked for an image *and* lost it still is.
 
 `note` is free text and is the whole point of the format.
 

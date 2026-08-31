@@ -941,6 +941,65 @@ video {
 }
 .sb-missing { font-size: 11px; color: var(--red); }
 
+/* A beat with no visual is not the same as a beat whose visual was lost.
+   One is doing its job; the other is the thing missing[] exists to report. */
+.sb-placeholder { font-size: 11px; color: var(--muted); font-style: italic; }
+
+/* The quote stands in for the picture, so a board of pure narration reads as
+   a script rather than as a grid of holes. */
+.sb-quote {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  padding: 8px 10px;
+  border-left: 2px solid var(--orange);
+  margin: 0 8px;
+  max-height: 100%;
+  overflow: auto;
+  text-align: left;
+}
+
+.sb-narr {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+}
+.sb-narr-time { display: flex; align-items: center; gap: 8px; }
+.sb-dur {
+  color: var(--orange);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.sb-at { color: var(--muted); font-variant-numeric: tabular-nums; }
+.sb-precision { color: var(--muted); font-size: 10px; }
+.sb-attrib { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-words { display: flex; align-items: center; gap: 5px; }
+.sb-words label { color: var(--muted); }
+.sb-words input { width: 52px; font-size: 11px; padding: 2px 4px; }
+.sb-wordcount { color: var(--muted); }
+.sb-narr audio { width: 100%; height: 28px; }
+
+/* The prompt says what to make; the note says why the beat is here. Kept
+   apart on purpose - merged, the reasoning gets crowded out by craft. */
+.sb-prompt {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 6px;
+}
+.sb-prompt:focus { outline: none; border-color: var(--orange); border-style: solid; }
+
 .sb-note {
   width: 100%;
   resize: vertical;
