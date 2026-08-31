@@ -379,6 +379,16 @@ observed ceiling.
   fast-forwards and restarts **only if the app was already running**, since
   the app is on demand and updating code is not a request to serve it.
   A dirty tree or a diverged checkout is refused rather than merged.
+- **Three sessions write to one `library.json`, so prefer the additive
+  endpoints.** `POST /api/items/batch-tag` (and `batch-palette`) add or
+  remove *one* tag and are safe under concurrency — eight at once on the same
+  item all land. `PATCH /api/items/{id}` replaces the whole `tags` list, so if
+  you read the list, add to it and send it back, another session's tag written
+  in between is overwritten. That is last-writer-wins by design, not a bug,
+  and no server-side lock can fix it: the stale list was computed on your
+  side. The library itself is safe either way — writes are atomic and every
+  read-modify-write inside the app holds a lock — but *what you send* is your
+  problem.
 - `tail_clean: false` in a cut's diagnostics means no natural pause was
   within reach and the tail was faded. Usable, but moving the end to just
   before a real pause is better — that is what step 2 is for.
