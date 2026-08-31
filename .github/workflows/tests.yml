@@ -1,0 +1,67 @@
+name: tests
+
+# Two machines run this code, so two jobs run the suite: the corpus server
+# (Linux, 3.12) and the desktop app (Windows, 3.14). Those are the versions
+# actually deployed - a wider matrix would add combinations nobody runs, and
+# the point of a red build here is to stop a push that would break one of
+# these two boxes.
+#
+# The suite is hermetic: no network, no corpus, no GPU, no ffmpeg, no real
+# library. That is what makes this workflow possible at all, and tests/
+# conftest.py is where the claim is made.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# A second push supersedes the first; there is no reason to keep paying for
+# a run whose commit is already history.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    env:
+      # The Windows runner console is cp1252, and pytest prints test names
+      # that are not. Without this a passing suite can still fail to report.
+      PYTHONIOENCODING: utf-8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: server (ubuntu, py3.12)
+            os: ubuntu-latest
+            python: "3.12"
+          - label: desktop (windows, py3.14)
+            os: windows-latest
+            python: "3.14"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: install dependencies
+        shell: bash
+        run: |
+          # faster-whisper is excluded deliberately. It is imported inside the
+          # one function that transcribes (quotesource/transcribe.py), never at
+          # module scope, so nothing in the suite reaches it - and installing
+          # the CUDA-adjacent stack to prove that would cost minutes a run.
+          #
+          # Filtered out of the file rather than replaced by a hand-written
+          # list: a dependency added to requirements.txt arrives here without
+          # anyone having to remember this workflow exists.
+          grep -v '^faster-whisper' requirements.txt > ci-requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install -r ci-requirements.txt -r requirements-dev.txt
+
+      - name: pytest
+        run: python -m pytest

@@ -26,7 +26,10 @@ MOJIBAKE = (
     _C3 + chr(0xA8),     # c3 a8
 )
 
-PATTERNS = ("*.py", "*.md", "*.bat", "*.txt", "*.yaml", "*.html", "*.js", "*.css")
+# Both YAML spellings: the workflow files are `.yml`, and a list that
+# covered only `.yaml` quietly exempted the whole of .github/ from this.
+PATTERNS = ("*.py", "*.md", "*.bat", "*.txt", "*.yaml", "*.yml",
+            "*.html", "*.js", "*.css")
 
 
 def source_files():

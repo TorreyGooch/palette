@@ -11,3 +11,7 @@ config.json
 # in use; this covers the default location beside the repo. Without it a
 # `git add -A` walks ~1.8 GB and stalls long enough to leave an index.lock.
 /Library/
+
+# Written by the CI install step (requirements.txt minus the whisper stack).
+# Only ever exists on a runner, but keep it out of a stray local `git add -A`.
+ci-requirements.txt
