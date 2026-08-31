@@ -145,7 +145,17 @@ def embed_stats() -> dict:
     _ensure_schema(con)
     con.executescript(EMBED_SCHEMA)
     total = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-    done = con.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+    # Count chunks that *have* a vector, not rows in the vector table. Those
+    # differ: chunk_id declares a foreign key, but SQLite does not enforce one
+    # unless asked, so re-chunking or removing an episode leaves vectors whose
+    # chunk is gone. Counting rows made coverage exceed 1.0 - which quietly
+    # cost the field its only job, since a number that can read 1.0011 can no
+    # longer distinguish complete from complete-plus-stale. Joining makes the
+    # ratio correct by construction rather than by clamping it afterwards.
+    done = con.execute(
+        "SELECT COUNT(*) FROM embeddings e JOIN chunks c ON c.id = e.chunk_id"
+    ).fetchone()[0]
+    vectors = con.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
     # Report what the vectors actually are, not what this shell happens to be
     # configured for — otherwise status misreports whenever QS_EMBED_MODEL is
     # unset in the calling environment but the store was built with another.
@@ -154,6 +164,12 @@ def embed_stats() -> dict:
     stats = {"chunks": total, "embedded": done,
              "coverage": round(done / total, 4) if total else 0.0,
              "model": stored or model_name()}
+    # Reported only when there are any, in the same spirit as model_mismatch
+    # below: a line that is always zero stops being read. Orphans are harmless
+    # to results - nothing can match a chunk that no longer exists - but they
+    # are the difference between coverage being right and merely looking it.
+    if vectors > done:
+        stats["orphan_vectors"] = vectors - done
     if stored and stored != model_name():
         stats["model_mismatch"] = (
             f"vectors are '{stored}' but QS_EMBED_MODEL is '{model_name()}'; "

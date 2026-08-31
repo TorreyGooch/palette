@@ -72,6 +72,37 @@ def episode_status(ep_dir: Path) -> str:
     return meta.get("status", "unknown")
 
 
+def failure_kind(error, rate_limited: bool = False) -> str:
+    """What kind of failure this was, so a caller need not read the prose.
+
+    The question a run leaves behind is "retry now, or wait a day?", and
+    answering it currently means eyeballing an error string. Three kinds
+    actually occur:
+
+      rate_limited - the endpoint asked us to slow down. Wait; the circuit
+                     breaker has already stopped the run.
+      timeout      - a read timed out. Transient, and a plain re-run fixes
+                     it; three of these in one Vervaeke run all cleared on
+                     the next pass.
+      other        - anything else. Read it.
+
+    Note there is no `no_captions`: a video without captions does not fail.
+    It is stored with status `needs_transcription` and counts as a success,
+    because the episode is in the corpus and whisper can finish the job.
+
+    `rate_limited` comes from the exception *type* rather than its text,
+    since that is certain where string matching is a guess.
+    """
+    if rate_limited:
+        return "rate_limited"
+    text = str(error or "").lower()
+    if "timed out" in text or "timeout" in text:
+        return "timeout"
+    if "429" in text or "too many requests" in text:
+        return "rate_limited"
+    return "other"
+
+
 class RateLimited(Exception):
     """Every attempt at one episode was refused for rate limiting."""
 
@@ -419,7 +450,8 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
             consecutive_limited += 1
             result["failed"] += 1
             result.setdefault("failures", []).append(
-                {"episode_id": entry["episode_id"], "error": str(e)})
+                {"episode_id": entry["episode_id"], "error": str(e),
+                 "kind": failure_kind(e, rate_limited=True)})
             print(f"  {entry['episode_id']}  FAILED: {e}", flush=True)
         except Exception as e:
             # An ordinary failure - no captions on this video, say - is not
@@ -429,7 +461,8 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
             # let an alternating 429 / no-captions channel run forever.
             result["failed"] += 1
             result.setdefault("failures", []).append(
-                {"episode_id": entry["episode_id"], "error": str(e)})
+                {"episode_id": entry["episode_id"], "error": str(e),
+                 "kind": failure_kind(e)})
             # failures always print, even with --quiet
             print(f"  {entry['episode_id']}  FAILED: {e}", flush=True)
         processed += 1

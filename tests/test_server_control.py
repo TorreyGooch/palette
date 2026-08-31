@@ -162,3 +162,41 @@ def test_host_is_inferred_from_qs_remote(monkeypatch):
     monkeypatch.setenv("QS_REMOTE", "http://100.102.79.115:7862")
     monkeypatch.setenv("QS_SERVER_USER", "torrey")
     assert main._server_ssh() == "torrey@100.102.79.115"
+
+
+# ── saying which side failed ──────────────────────────────────────────────────
+
+def test_an_ssh_failure_with_no_output_says_it_was_the_transport(ssh):
+    """"no output" reads as though the server answered, and answered emptily.
+
+    It usually means ssh never arrived - no key, no route, wrong host - which
+    is a fault on this side. A session chasing that message went looking at
+    the corpus server, which was fine.
+    """
+    from palette_app import main
+
+    fake_run, _ = ssh
+    fake_run.stdout = ""
+    fake_run.stderr = ""
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_server_status()
+
+    assert raised.value.status_code == 502
+    assert "transport failed rather than the server" in raised.value.detail
+    # The exit status is the one fact always available to point at ssh.
+    assert "ssh exited" in raised.value.detail
+
+
+def test_ssh_stderr_is_still_preferred_when_there_is_any(ssh):
+    """When ssh does explain itself, that explanation is the whole answer."""
+    from palette_app import main
+
+    fake_run, _ = ssh
+    fake_run.stdout = ""
+    fake_run.stderr = "torrey@10.0.0.1: Permission denied (publickey)."
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_server_status()
+
+    assert "Permission denied (publickey)" in raised.value.detail

@@ -77,3 +77,66 @@ def test_falls_back_to_env_when_nothing_is_stored(tmp_path, monkeypatch):
     stats = embed_stats()
     assert stats["model"] == "BAAI/bge-base-en-v1.5"
     assert stats["embedded"] == 0
+
+
+# ── coverage must be able to say "incomplete", which means it cannot exceed 1 ──
+
+def orphan_a_vector(root):
+    """Leave a vector whose chunk is gone, as a re-chunk or removal does.
+
+    chunk_id declares a foreign key, but SQLite does not enforce one unless
+    asked, so deleting the chunk leaves the row behind.
+    """
+    from quotesource.indexer import connect
+
+    con = connect()
+    con.execute("INSERT INTO embeddings (chunk_id, vector) VALUES (9999, ?)",
+                (b"\x00" * 16,))
+    con.commit()
+    con.close()
+
+
+def test_coverage_cannot_exceed_one(corpus):
+    """A field that reads 1.0011 can no longer say results may be incomplete."""
+    from quotesource.embedder import embed_stats
+
+    orphan_a_vector(corpus)
+    stats = embed_stats()
+
+    assert stats["coverage"] <= 1.0
+    assert stats["coverage"] == 1.0, "the one real chunk is embedded"
+
+
+def test_orphaned_vectors_are_reported_as_their_own_number(corpus):
+    from quotesource.embedder import embed_stats
+
+    orphan_a_vector(corpus)
+    stats = embed_stats()
+
+    assert stats["orphan_vectors"] == 1
+    assert stats["chunks"] == 1
+    assert stats["embedded"] == 1, "embedded counts chunks, not vector rows"
+
+
+def test_a_clean_store_does_not_mention_orphans(corpus):
+    """A line that is always present and always zero stops being read."""
+    from quotesource.embedder import embed_stats
+
+    assert "orphan_vectors" not in embed_stats()
+
+
+def test_an_unembedded_chunk_still_reads_as_incomplete(corpus):
+    """The case coverage exists for must survive the fix."""
+    from quotesource.embedder import embed_stats
+    from quotesource.indexer import connect
+
+    con = connect()
+    con.execute("INSERT INTO chunks (episode_id, start, end, text) "
+                "VALUES ('EP', 1.0, 2.0, 'second')")
+    con.commit()
+    con.close()
+    orphan_a_vector(corpus)
+
+    stats = embed_stats()
+    assert stats["coverage"] == 0.5
+    assert stats["orphan_vectors"] == 1

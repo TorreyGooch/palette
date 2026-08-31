@@ -841,6 +841,16 @@ def qs_search(q: str, mode: str = "semantic", source: Optional[str] = None,
     except HTTPException:
         raise
     except Exception as e:
+        # Semantic search needs the GPU and the embedding model. Keyword
+        # search needs neither - it is FTS5, on the CPU - so when the GPU
+        # cannot initialise, one of these two still answers. A bare cuBLAS
+        # error reads as "the corpus is unreachable" and has already cost a
+        # session that had a working search path one parameter away.
+        if mode != "grep":
+            raise HTTPException(
+                500, f"semantic search failed: {e}. Keyword search does not "
+                     f"use the GPU and may still work - retry the same query "
+                     f"with mode=grep") from None
         raise HTTPException(500, str(e))
 
 
@@ -1101,7 +1111,14 @@ def _run_server_action(action: str) -> dict:
     try:
         state = json.loads(proc.stdout)
     except (json.JSONDecodeError, ValueError):
-        detail = note or (proc.stdout or "").strip() or "no output"
+        detail = note or (proc.stdout or "").strip()
+        if not detail:
+            # A bare "no output" reads as though the corpus server answered
+            # and answered emptily. Usually it means ssh never got there -
+            # no key, no route, wrong host - which is a fault on this side.
+            # The exit status is the one thing always available to say so.
+            detail = (f"ssh exited {proc.returncode} with no output; the "
+                      f"transport failed rather than the server")
         raise HTTPException(502, f"{target}: {detail[:300]}") from None
 
     state["action"] = action

@@ -264,3 +264,66 @@ def test_the_loop_sleeps_a_different_amount_each_time(monkeypatch, tmp_path):
                          quiet=True)
     assert len(slept) >= 10
     assert len(set(slept)) > len(slept) * 0.8
+
+
+# ── what kind of failure was that ─────────────────────────────────────────────
+#
+# A run leaves behind the question "retry now, or wait a day?", and answering
+# it meant eyeballing an error string. Three Vervaeke episodes failed on
+# `Read timed out` and all three cleared on a plain re-run; nothing in the
+# result said they were the retryable sort.
+
+def test_a_rate_limit_is_known_from_the_exception_not_its_words():
+    """Type is certain where matching prose is a guess."""
+    from quotesource.ingest import RateLimited, failure_kind
+
+    assert failure_kind(RateLimited("anything at all"),
+                        rate_limited=True) == "rate_limited"
+
+
+@pytest.mark.parametrize("message", [
+    "HTTPSConnectionPool: Read timed out. (read timeout=20)",
+    "The read operation timed out",
+    "TimeoutError",
+])
+def test_a_timeout_is_classified_as_transient(message):
+    from quotesource.ingest import failure_kind
+
+    assert failure_kind(message) == "timeout"
+
+
+@pytest.mark.parametrize("message", [
+    "HTTP Error 429: Too Many Requests",
+    "yt-dlp: error: 429 returned",
+])
+def test_a_429_in_the_text_still_reads_as_rate_limited(message):
+    from quotesource.ingest import failure_kind
+
+    assert failure_kind(message) == "rate_limited"
+
+
+def test_anything_unrecognised_is_other_rather_than_guessed():
+    from quotesource.ingest import failure_kind
+
+    assert failure_kind("Video unavailable in your country") == "other"
+    assert failure_kind("") == "other"
+    assert failure_kind(None) == "other"
+
+
+def test_a_recorded_failure_carries_its_kind(run_ingest):
+    """The whole point is that a caller does not have to parse the prose."""
+    result, _ = run_ingest(
+        {"a": RuntimeError("HTTPSConnectionPool: Read timed out.")})
+
+    assert result["failed"] == 1
+    assert result["failures"][0]["kind"] == "timeout"
+    assert "timed out" in result["failures"][0]["error"], "the prose is kept too"
+
+
+def test_a_rate_limited_failure_is_recorded_as_one(run_ingest):
+    """These are the ones to wait on rather than retry, and now say so."""
+    result, _ = run_ingest({"a": limited(), "b": limited()})
+
+    assert result["stopped"] == "rate_limited"
+    assert [f["kind"] for f in result["failures"]] == ["rate_limited",
+                                                       "rate_limited"]
