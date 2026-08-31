@@ -53,7 +53,7 @@ the corpus to your desktop, not a UI to you. `server-app.sh` owns its
 lifecycle:
 
 ```bash
-./server-app.sh start     # also stop | restart | status
+./server-app.sh start     # also stop | restart | update | status
 ```
 
 `status` prints JSON, which is what the Start/Stop control on the desktop's
@@ -69,6 +69,35 @@ generation batch.
 `PALETTE_API_ONLY=1` makes `/` serve a short explanation instead of the
 app. Two palettes that look identical but hold different libraries is how
 you end up tagging clips into the wrong one.
+
+### Keeping this box current
+
+```bash
+./server-app.sh update
+```
+
+Fetches, fast-forwards, and restarts **only if the app was already
+running** — updating code is not a request to serve it, and this box is on
+demand precisely so it is not holding an embedding model for nobody.
+
+It refuses rather than guesses:
+
+| situation | what happens |
+|---|---|
+| tree is dirty | refused, HEAD unmoved — same commit, different code is the failure this exists to catch |
+| checkout has diverged | refused; nothing is merged |
+| already current | says so, changes nothing |
+| moved, app stopped | pulls, reports `nothing to restart` |
+| moved, app running | pulls, restarts, `stale` returns to false |
+
+This is the same outcome as the desktop's `deploy.ps1`, initiated from
+this side. `deploy.ps1` remains the one that proves *both* machines agree;
+this is for when that machine is off.
+
+The suite is not run here — there is no pytest in this environment. It runs
+before the push (`hooks/pre-push`) and again in GitHub Actions, on ubuntu
+3.12 and windows 3.14, the two versions actually deployed. If either of
+those stops being true, `update_app` is where the check belongs.
 
 ### Serving the UI from a machine instead
 

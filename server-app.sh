@@ -6,7 +6,7 @@
 # model is memory taken from that for nothing. The desktop app drives this
 # over ssh, and you can run it by hand.
 #
-#   ./server-app.sh start|stop|restart|status
+#   ./server-app.sh start|stop|restart|update|status
 #
 # status prints JSON, because the app parses it.
 
@@ -70,6 +70,62 @@ stop_app() {
   return 1
 }
 
+# Bring the checkout forward, and restart only what was already running.
+#
+# The desktop's deploy.ps1 pushes and then pulls here over ssh, which needs
+# that machine switched on and someone to run it. This is the same step from
+# this side, for when it is not.
+#
+# It never *starts* a stopped app. This box is on demand precisely so it is
+# not holding an embedding model for nobody, and updating the code is not a
+# request to serve it.
+update_app() {
+  cd "$REPO"
+
+  # Same commit, different code is the failure this guards against - a mode
+  # bit, an edit made here to get something working. A fast-forward over that
+  # either refuses or carries it silently onward, and HEAD says nothing.
+  local dirty
+  dirty=$(git status --porcelain)
+  if [ -n "$dirty" ]; then
+    echo "tree is dirty - refusing to update:" >&2
+    echo "$dirty" >&2
+    return 1
+  fi
+
+  local before after upstream
+  before=$(git rev-parse --short HEAD)
+  upstream=$(git rev-parse --abbrev-ref '@{u}' 2>/dev/null || echo "")
+  if [ -z "$upstream" ]; then
+    echo "no upstream branch to update from" >&2
+    return 1
+  fi
+
+  git fetch --quiet origin || { echo "could not reach origin" >&2; return 1; }
+  git merge --ff-only --quiet "@{u}" || {
+    echo "not a fast-forward: this checkout has diverged from $upstream" >&2
+    return 1
+  }
+  after=$(git rev-parse --short HEAD)
+
+  if [ "$before" = "$after" ]; then
+    echo "already on $after" >&2
+    return 0
+  fi
+  echo "updated $before -> $after" >&2
+
+  # Nothing here runs the suite: this environment has no pytest, and the
+  # tests ran before the push (hooks/pre-push) and again in CI. If either of
+  # those stops being true, this is where the check belongs.
+  if listening; then
+    echo "restarting to pick it up" >&2
+    stop_app || true
+    start_app
+  else
+    echo "not running - nothing to restart" >&2
+  fi
+}
+
 # The version a process is serving is fixed when it imports, so a pull does
 # not change it and only a restart does. Ask the API itself rather than the
 # repo: reporting HEAD here once claimed the app was up to date while it had
@@ -130,6 +186,7 @@ case "${1:-status}" in
   start)   start_app;   status_json ;;
   stop)    stop_app;    status_json ;;
   restart) stop_app || true; start_app; status_json ;;
+  update)  update_app;  status_json ;;
   status)  status_json ;;
-  *) echo "usage: $0 start|stop|restart|status" >&2; exit 2 ;;
+  *) echo "usage: $0 start|stop|restart|update|status" >&2; exit 2 ;;
 esac

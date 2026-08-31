@@ -311,7 +311,11 @@ observed ceiling.
 - `/api/qs/status` reports `palette.version` and `palette.capabilities` for
   both ends (`remote_palette` when bridged). If something documented here
   is missing, check the two sides are on the same build — `.\deploy.ps1
-  -Check` answers that in one command.
+  -Check` answers that in one command, and `./server-app.sh update` on the
+  server brings that side forward without the desktop being involved. It
+  fast-forwards and restarts **only if the app was already running**, since
+  the app is on demand and updating code is not a request to serve it.
+  A dirty tree or a diverged checkout is refused rather than merged.
 - `tail_clean: false` in a cut's diagnostics means no natural pause was
   within reach and the tail was faded. Usable, but moving the end to just
   before a real pause is better — that is what step 2 is for.
