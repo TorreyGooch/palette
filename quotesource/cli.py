@@ -169,7 +169,7 @@ def cmd_guest(args):
 
 def cmd_ingest(args):
     from . import registry
-    from .ingest import ingest_source
+    from .ingest import InCooldown, ingest_source
 
     if args.all:
         sources = registry.list_sources()
@@ -193,6 +193,11 @@ def cmd_ingest(args):
         try:
             results.append(ingest_source(src, limit=args.limit, quiet=args.quiet,
                                          min_duration=override))
+        except InCooldown as e:
+            # Not one source's problem, and not a row in a report that exits
+            # zero. A cooldown applies to every source, and a caller checking
+            # the exit status has to be told the run did not happen.
+            _fail(str(e))
         except Exception as e:
             results.append({"source": src["id"], "error": str(e)})
     _out(results if args.all else results[0], args.pretty)

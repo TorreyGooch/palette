@@ -676,6 +676,12 @@ def _fetch_rss_episode(source: dict, entry: dict, quiet: bool) -> dict:
 def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
                   min_duration: int | None = None) -> dict:
     ensure_root()
+    # Before anything reaches the network. Enumerating a channel is itself a
+    # request - a full walk of every video on it - and checking after that
+    # meant a 317-video listing went out during an active cooldown. The
+    # single most expensive call was the one the guard did not cover.
+    check_cooldown()
+
     stype = source["type"]
     if not quiet:
         print(f"[{source['id']}] enumerating {stype}…", flush=True)
@@ -726,8 +732,6 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
         # this is the one to check before believing a run was clean.
         "rate_limited": False,
     }
-
-    check_cooldown()
 
     processed = 0
     rate_limited_at = None

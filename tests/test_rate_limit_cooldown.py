@@ -181,3 +181,47 @@ def test_status_reports_the_standoff(corpus):
     assert block["active"] is True
     assert block["source"] == "levin_yt"
     assert block["remaining_s"] > 0
+
+
+# -- the guard has to precede the *first* request ----------------------------
+
+def test_a_cooldown_blocks_the_channel_walk_too(corpus, monkeypatch):
+    """Enumerating a channel is a request, and the most expensive one.
+
+    Checking after enumeration let a 317-video listing go out during an
+    active cooldown - the single call the guard most needed to cover. Found
+    by running it against the real server rather than by reading it.
+    """
+    from quotesource import registry
+
+    source = registry.add_source("s", "S", "youtube_channel", "https://x")
+    walked = []
+    monkeypatch.setattr(ingest, "_enumerate_youtube",
+                        lambda *a, **k: walked.append(1) or [])
+    ingest.begin_cooldown(limited(), "s")
+
+    with pytest.raises(ingest.InCooldown):
+        ingest.ingest_source(source, quiet=True)
+
+    assert walked == [], "the channel must not be enumerated during a cooldown"
+
+
+def test_the_cli_fails_rather_than_reporting_a_cooldown_as_a_result(corpus,
+                                                                    monkeypatch,
+                                                                    capsys):
+    """It was a row in the results and the command exited 0.
+
+    A caller checking the exit status would read a run that never happened as
+    a success. A cooldown applies to every source, so it ends the command.
+    """
+    from quotesource import cli, registry
+
+    registry.add_source("s", "S", "youtube_channel", "https://x")
+    monkeypatch.setattr(ingest, "_enumerate_youtube", lambda *a, **k: [])
+    ingest.begin_cooldown(limited(), "s")
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["ingest", "s"])
+
+    assert exit_info.value.code != 0
+    assert "not asking again" in json.loads(capsys.readouterr().err)["error"]
