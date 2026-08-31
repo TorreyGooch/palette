@@ -180,3 +180,65 @@ def test_adopt_tolerates_a_pull_without_a_manifest(library, monkeypatch):
     item = adopt(library, {"filename": "clip.m4a", "title": "q"}, kind="pull")
     assert item["filename"] == "clip.m4a"
     assert "word-cut" not in item["tags"], "word-cut is a cut-only tag"
+
+
+# ── carrying an error across the bridge intact ────────────────────────────────
+
+def _http_error(monkeypatch, status, body):
+    """Make the next remote call fail with this HTTP status and body."""
+    import io as _io
+    import urllib.error
+    import urllib.request
+
+    from palette_app import qs_remote
+
+    monkeypatch.setenv("QS_REMOTE", "http://10.0.0.1:7862")
+    monkeypatch.setattr(qs_remote, "remote_base", lambda: "http://10.0.0.1:7862")
+
+    def raise_it(*a, **k):
+        raise urllib.error.HTTPError(
+            "http://10.0.0.1:7862/api/qs/words", status, "err", {},
+            _io.BytesIO(body.encode("utf-8")))
+
+    monkeypatch.setattr(urllib.request, "urlopen", raise_it)
+    return qs_remote
+
+
+def test_a_long_explanation_survives_the_trip(monkeypatch):
+    """The body was truncated *before* being parsed, so JSON of any real
+    length failed to parse - and the caller got the raw envelope with the
+    message chopped mid-word. The advice lives at the end of these messages,
+    so the tail is the worst part to lose."""
+    import json as _json
+
+    advice = ("This blocks new cuts from the episode, not narrowing a clip "
+              "you already have: a cut's .words.json carries per-word "
+              "timings, so re-splitting one by word index needs no audio.")
+    detail = ("ERROR: unable to download video data: HTTP Error 403: "
+              "Forbidden. " + "Padding to push this well past four hundred "
+              "characters so the old limit would bite. " * 3 + advice)
+    qs_remote = _http_error(monkeypatch, 502, _json.dumps({"detail": detail}))
+
+    with pytest.raises(qs_remote.RemoteError) as raised:
+        qs_remote.get("/api/qs/words", {"episode_id": "EP"})
+
+    message = str(raised.value)
+    assert advice in message, "the tail, where the advice is, must survive"
+    assert "{" not in message, "the JSON envelope must not leak through"
+    assert raised.value.status == 502
+
+
+def test_a_non_json_error_body_still_reads(monkeypatch):
+    qs_remote = _http_error(monkeypatch, 500, "Internal Server Error")
+
+    with pytest.raises(qs_remote.RemoteError) as raised:
+        qs_remote.get("/api/qs/status")
+    assert "Internal Server Error" in str(raised.value)
+
+
+def test_an_enormous_body_is_still_bounded(monkeypatch):
+    qs_remote = _http_error(monkeypatch, 500, "x" * 50000)
+
+    with pytest.raises(qs_remote.RemoteError) as raised:
+        qs_remote.get("/api/qs/status")
+    assert len(str(raised.value)) < 2200

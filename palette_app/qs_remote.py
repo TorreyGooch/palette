@@ -71,11 +71,20 @@ def _request(method: str, path: str, params: dict = None,
         with urllib.request.urlopen(req, timeout=timeout or TIMEOUT) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:400]
+        # Parse before truncating, not after. Cutting the body first breaks
+        # the JSON, so the parse fails, and what reaches the caller is the raw
+        # envelope with the message chopped mid-word - losing exactly the tail
+        # of a long explanation, which is where the advice lives. 400 was also
+        # simply too short: these are sentences meant to be read.
+        body = e.read().decode("utf-8", "replace")
+        detail = body
         try:
-            detail = json.loads(detail).get("detail", detail)
+            parsed = json.loads(body)
+            if isinstance(parsed, dict):
+                detail = parsed.get("detail", body)
         except Exception:
             pass
+        detail = str(detail)[:2000]
         # Preserve the upstream status: a 404 for a missing episode should not
         # reach the browser as a generic gateway error.
         raise RemoteError(f"remote {e.code}: {detail}", e.code) from None
