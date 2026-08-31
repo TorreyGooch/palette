@@ -102,7 +102,8 @@ def cmd_guest(args):
     findable later.
     """
     from . import registry
-    from .ingest import add_episode, remove_episode, _pause
+    from .ingest import (InCooldown, add_episode, check_cooldown,
+                         remove_episode, _pause)
 
     if args.action == "list":
         _out([s for s in registry.list_sources() if s.get("type") == "episodes"],
@@ -138,6 +139,14 @@ def cmd_guest(args):
         _fail("guest add requires at least one URL", 2)
     if not args.person:
         _fail("guest add requires --person", 2)
+
+    # Before the source is created, not after. A single URL is still a YouTube
+    # request, and a standoff that let the command run far enough to write a
+    # new source into sources.yaml is a standoff with a side effect.
+    try:
+        check_cooldown()
+    except InCooldown as e:
+        _fail(str(e))
 
     source_id = args.source_id or _guest_source_id(args.person)
     source = registry.get_source(source_id)

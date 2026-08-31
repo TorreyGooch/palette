@@ -225,3 +225,22 @@ def test_the_cli_fails_rather_than_reporting_a_cooldown_as_a_result(corpus,
 
     assert exit_info.value.code != 0
     assert "not asking again" in json.loads(capsys.readouterr().err)["error"]
+
+
+def test_guest_add_refuses_before_creating_the_source(corpus, monkeypatch,
+                                                      capsys):
+    """It reported a per-URL error, exited 0, and left a new source behind."""
+    from quotesource import cli, registry
+
+    ingest.begin_cooldown(limited())
+    reached = []
+    monkeypatch.setattr(ingest, "_fetch_youtube_episode",
+                        lambda *a, **k: reached.append(1))
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["guest", "add", "https://youtu.be/PWasTAtR6Ns",
+                  "--person", "Someone"])
+
+    assert exit_info.value.code != 0
+    assert reached == []
+    assert registry.get_source("guest_someone") is None, "no source written"
