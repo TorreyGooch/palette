@@ -279,6 +279,23 @@ passing it to `ingest` overrides for one run. Accepts `1800`, `30m`,
   what was said, and is not an excuse to skip checking. `transcript_source:
   manual` is **not** a quality signal — creators upload unedited auto-caption
   dumps as manual tracks, which is the whole reason the heuristic exists.
+  Measured across the corpus, and it is worse than the old per-source advice
+  suggested:
+
+  | source | clean | raw |
+  |---|---|---|
+  | `jordanpeterson` | 239 | 812 |
+  | `lexfridman` | 92 | 458 |
+  | `levin_yt` | 163 | 12 |
+  | `dwarkesh_yt` | 53 | 72 |
+  | `vervaeke_amc` | 0 | 50 |
+
+  Two Lex episodes, both recorded `youtube_manual`: one reads "It's hard for
+  us humans to make any kind of clean predictions about highly nonlinear
+  dynamical systems." and the other "the following is a conversation with
+  Ivanka Trump businesswoman real estate developer" — no punctuation, and
+  "ianka" a few words later. **`levin_yt` is the only source that is mostly
+  clean.** Assume `raw` and check.
 - After any `qs ingest`, run `qs index` then `qs embed` (both incremental).
 - **Clip filenames truncate their bounds to whole seconds**, so two cuts a
   fraction of a second apart collide on one name and several library items
