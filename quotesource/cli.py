@@ -178,7 +178,7 @@ def cmd_guest(args):
 
 def cmd_ingest(args):
     from . import registry
-    from .ingest import InCooldown, ingest_source
+    from .ingest import BudgetExhausted, InCooldown, ingest_source
 
     if args.all:
         sources = registry.list_sources()
@@ -202,10 +202,11 @@ def cmd_ingest(args):
         try:
             results.append(ingest_source(src, limit=args.limit, quiet=args.quiet,
                                          min_duration=override))
-        except InCooldown as e:
-            # Not one source's problem, and not a row in a report that exits
-            # zero. A cooldown applies to every source, and a caller checking
-            # the exit status has to be told the run did not happen.
+        except (InCooldown, BudgetExhausted) as e:
+            # Neither is one source's problem, and neither is a row in a
+            # report that exits zero. A cooldown and a spent allowance both
+            # apply to every source, and a caller checking the exit status has
+            # to be told the run did not happen.
             _fail(str(e))
         except Exception as e:
             results.append({"source": src["id"], "error": str(e)})
@@ -406,6 +407,12 @@ def cmd_status(args):
         return
     print(f"data root: {data['data_root']}")
     print(f"python: {data['python']}")
+    budget = data.get("budget") or {}
+    if budget:
+        print(f"youtube budget: {budget['hour']}/{budget['hour_max']} this hour, "
+              f"{budget['day']}/{budget['day_max']} today"
+              + (f" (next in {budget['wait_s']:.0f}s)"
+                 if budget.get("wait_s") else ""))
     cool = data.get("cooldown") or {}
     if cool.get("active"):
         print(f"COOLDOWN: no YouTube requests until {cool['until']} "

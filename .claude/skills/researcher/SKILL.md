@@ -107,6 +107,16 @@ has already been made.
 
 Operating rules that still matter:
 
+- **There is a request budget and it paces you.** 30/hour and 200/day by
+  default (`QS_MAX_PER_HOUR`, `QS_MAX_PER_DAY`), shared on disk so two
+  sessions cannot each spend the whole allowance. The hourly figure is also a
+  **minimum gap** — about one request every two minutes — because a bare cap
+  permits thirty inside a minute and then an idle hour, which is the shape
+  that drew the limit. A long ingest is therefore *supposed* to look slow.
+  `qs status` shows what is left.
+- **A channel walk spends from it.** `qs ingest` re-enumerates the whole
+  channel every run, so a probe, a main run and a retry are three listings.
+  Plan a large channel as few runs, not many.
 - Use `--limit` and run in **small batches**. Do not run `--all` on a large
   channel unattended.
 - **Roughly 300 caption fetches a day** is the observed ceiling before 429s

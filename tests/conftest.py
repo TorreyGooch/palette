@@ -13,6 +13,22 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
+@pytest.fixture(autouse=True)
+def _unbudgeted(monkeypatch):
+    """Take the YouTube request budget out of the way unless a test wants it.
+
+    The budget spaces real requests about two minutes apart, which is the
+    point of it and ruinous in a suite meant to run in seconds - one test that
+    happened to fetch twice took 111 of them. Raising the ceiling here rather
+    than stubbing `time.sleep` keeps the pacing code genuinely exercised, and
+    means a new test cannot silently acquire a two-minute pause by calling
+    something that fetches. Tests about the budget set these themselves, and
+    a fixture's own setenv wins over this one.
+    """
+    monkeypatch.setenv("QS_MAX_PER_HOUR", "1000000")
+    monkeypatch.setenv("QS_MAX_PER_DAY", "1000000")
+
+
 @pytest.fixture
 def library(tmp_path):
     """An empty but valid library root."""

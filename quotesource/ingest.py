@@ -162,6 +162,124 @@ _TRANSPORT = ("timed out", "timeout", "connection reset", "connection aborted",
 
 
 COOLDOWN_FILE = "youtube-cooldown.json"
+BUDGET_FILE = "youtube-budget.json"
+
+
+def _max_per_hour() -> int:
+    return int(os.environ.get("QS_MAX_PER_HOUR", "30"))
+
+
+def _max_per_day() -> int:
+    return int(os.environ.get("QS_MAX_PER_DAY", "200"))
+
+
+class BudgetExhausted(RuntimeError):
+    """Today's allowance is spent. Not a limit - the point is never meeting one."""
+
+
+def budget_path() -> Path:
+    return ensure_root() / BUDGET_FILE
+
+
+def _read_ledger() -> list:
+    """Request timestamps from the last day, oldest first."""
+    path = budget_path()
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return []
+    cutoff = datetime.now() - timedelta(days=1)
+    out = []
+    for stamp in raw if isinstance(raw, list) else []:
+        try:
+            when = datetime.fromisoformat(stamp)
+        except (TypeError, ValueError):
+            continue
+        if when > cutoff:
+            out.append(when)
+    return sorted(out)
+
+
+def budget_state() -> dict:
+    """What has been spent, and when the next request would be allowed.
+
+    Density is what trips a limiter, not volume: the 429 that started this
+    arrived at ~120 requests inside 25 minutes, well under the ~300/day that
+    had been the working figure. Jitter fixed the cadence signature and did
+    nothing about rate, which is what this is for.
+    """
+    now = datetime.now()
+    ledger = _read_ledger()
+    hour = [w for w in ledger if w > now - timedelta(hours=1)]
+    per_hour, per_day = _max_per_hour(), _max_per_day()
+
+    # A cap on its own is not spacing. Thirty an hour permits thirty inside
+    # one minute and then an idle hour, which is precisely the shape that drew
+    # the limit: ~120 requests in 25 minutes, far under the daily figure. So
+    # the hourly allowance is also a minimum gap between requests, and the
+    # requests come out evenly instead of in a burst.
+    spacing = 3600.0 / per_hour if per_hour > 0 else 0.0
+    wait = 0.0
+    if ledger:
+        wait = max(wait, spacing - (now - ledger[-1]).total_seconds())
+    if len(hour) >= per_hour:
+        # The window is full; a slot frees when its oldest entry ages out.
+        wait = max(wait, (hour[0] + timedelta(hours=1) - now).total_seconds())
+    return {
+        "hour": len(hour), "hour_max": per_hour,
+        "day": len(ledger), "day_max": per_day,
+        "day_exhausted": len(ledger) >= per_day,
+        "spacing_s": round(spacing, 1),
+        "wait_s": round(max(0.0, wait), 1),
+    }
+
+
+def record_request(kind: str = "fetch"):
+    """Count one request against the budget, for every session to see.
+
+    Held under a lock and rewritten atomically: two sessions ingesting would
+    otherwise each read the same ledger and each write back their own, and an
+    undercount is the dangerous direction to be wrong in.
+    """
+    from palette_app.library import library_lock
+
+    root = ensure_root()
+    with library_lock(root):
+        ledger = _read_ledger()
+        ledger.append(datetime.now())
+        payload = json.dumps([w.isoformat(timespec="seconds") for w in ledger])
+        tmp = root / (BUDGET_FILE + ".tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, root / BUDGET_FILE)
+
+
+def await_slot(quiet: bool = False, kind: str = "fetch"):
+    """Wait for the budget to allow one more request, or refuse for today.
+
+    The hourly cap is spacing: at 30/hour a request is allowed about every two
+    minutes, and waiting for one is the normal case during a long ingest. The
+    daily cap is not something to sleep through - it raises, the run stops,
+    and ingest is resumable so tomorrow costs only the remainder.
+
+    The wait is jittered for the same reason the old pause was: requests at an
+    exact interval are the clearest automation signature a client can emit,
+    and a budget enforced to the second would reintroduce the metronome the
+    jitter was added to remove.
+    """
+    state = budget_state()
+    if state["day_exhausted"]:
+        raise BudgetExhausted(
+            f"today's budget is spent ({state['day']}/{state['day_max']} "
+            f"requests in 24h). Ingest is resumable, so tomorrow costs only "
+            f"the remainder. QS_MAX_PER_DAY raises it.")
+    if state["wait_s"] > 0:
+        wait = _pause(state["wait_s"], SLEEP_JITTER / 4)
+        _log(quiet, f"budget: {state['hour']}/{state['hour_max']} this hour; "
+                    f"waiting {wait:.0f}s")
+        time.sleep(wait)
+    record_request(kind)
 
 
 def _cooldown_hours() -> float:
@@ -340,6 +458,7 @@ def add_episode(url: str, source: dict, quiet: bool = False) -> dict:
     entry = {"episode_id": episode_id,
              "url": f"https://www.youtube.com/watch?v={episode_id}",
              "title": "", "duration": None}
+    await_slot(quiet)
     meta = _fetch_with_backoff(source, entry, quiet)
     row = {"source": source["id"], "episode_id": episode_id,
            "title": meta.get("title"),
@@ -683,6 +802,16 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
     check_cooldown()
 
     stype = source["type"]
+    if stype in ("youtube_channel", "youtube_playlist"):
+        # A full channel walk draws on the same allowance as a caption fetch,
+        # and re-running an ingest re-walks it. Counted, not exempt.
+        #
+        # An exhausted budget here raises rather than returning a result:
+        # nothing has been done yet, so there is no partial run to report and
+        # the command should say it did not happen. Once the loop is running
+        # the opposite is true, and it breaks with stopped: "budget" so what
+        # it managed is not thrown away.
+        await_slot(quiet, "enumerate")
     if not quiet:
         print(f"[{source['id']}] enumerating {stype}…", flush=True)
 
@@ -747,11 +876,21 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
         is_retry = existing is not None
         try:
             if stype == "rss":
+                # A podcast CDN wants you to have the file and has no limit
+                # worth the name. The budget is for YouTube.
                 _fetch_rss_episode(source, entry, quiet)
             else:
+                await_slot(quiet)
                 _fetch_with_backoff(source, entry, quiet)
             result["retried" if is_retry else "new"] += 1
             result["episodes"].append(entry["episode_id"])
+        except BudgetExhausted as e:
+            # Not a limit and not a failure: the allowance simply ran out.
+            # Nothing to apologise for and nothing to cool down from.
+            result["stopped"] = "budget"
+            result["budget"] = budget_state()
+            print(f"  stopping: {e}", flush=True)
+            break
         except RateLimited as e:
             rate_limited_at = e
             result["failed"] += 1
@@ -790,8 +929,8 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
                   f"only time.", flush=True)
             break
 
-        if stype != "rss":
-            time.sleep(_pause())
+        if stype == "rss":
+            time.sleep(_pause())        # the feed's own politeness pause
 
     return result
 

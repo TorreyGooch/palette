@@ -31,6 +31,13 @@ def _cooldown_block() -> dict:
             "source": state.get("source"), "reason": state.get("reason")}
 
 
+def _budget_block() -> dict:
+    """How much of today's request allowance is left."""
+    from .ingest import budget_state
+
+    return budget_state()
+
+
 def corpus_status() -> dict:
     root = ensure_root()
     episodes_root = root / "episodes"
@@ -86,6 +93,7 @@ def corpus_status() -> dict:
         "index": index_stats(),
         "embeddings": embed,
         "cooldown": _cooldown_block(),
+        "budget": _budget_block(),
         "disk": {
             "episodes_mb": round(_dir_size(root / "episodes") / 1048576, 1),
             "total_mb": round(_dir_size(root) / 1048576, 1),

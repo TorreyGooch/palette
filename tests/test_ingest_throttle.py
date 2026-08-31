@@ -261,10 +261,17 @@ def test_a_stopped_run_still_reports_what_it_managed(run_ingest):
     assert result["episodes"] == ["a"]
 
 
-def test_the_loop_sleeps_a_different_amount_each_time(monkeypatch, tmp_path):
-    """Guards the integration, not just the helper: no metronome in the loop."""
+def test_the_budgets_pacing_is_not_a_metronome(monkeypatch, tmp_path):
+    """Guards the integration, not just the helper.
+
+    The pause between episodes is the budget's spacing now, and a budget
+    enforced to the second would reintroduce the exact-interval signature the
+    jitter was added to remove. Requests spaced identically are the clearest
+    tell a client can emit, whatever the interval.
+    """
     slept = []
     monkeypatch.setenv("QUOTESOURCE_DATA", str(tmp_path))
+    monkeypatch.setenv("QS_MAX_PER_HOUR", "3600")     # one a second
     monkeypatch.setattr(ingest.time, "sleep", lambda s: slept.append(s))
     monkeypatch.setattr(ingest, "_enumerate_youtube",
                         lambda url, stype: [{"episode_id": f"e{i}", "url": "u",
@@ -275,8 +282,9 @@ def test_the_loop_sleeps_a_different_amount_each_time(monkeypatch, tmp_path):
 
     ingest.ingest_source({"id": "src", "type": "youtube_channel", "url": "u"},
                          quiet=True)
-    assert len(slept) >= 10
-    assert len(set(slept)) > len(slept) * 0.8
+
+    assert len(slept) >= 10, "it must pace at all"
+    assert len(set(slept)) > len(slept) * 0.8, "and not to the same value"
 
 
 # ── what kind of failure was that ─────────────────────────────────────────────

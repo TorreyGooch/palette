@@ -386,7 +386,25 @@ has, so picking it up later costs only the remainder.
 
 **Density, not volume, is what trips it.** A hard 429 arrived at roughly 120
 requests inside 25 minutes, well under the ~300/day that had been the working
-figure. Jitter fixed the *cadence* signature and does nothing about rate.
+figure. Jitter fixed the *cadence* signature and does nothing about rate — so
+there is now a **request budget**, shared on disk so two sessions cannot each
+spend the whole allowance:
+
+| knob | default | meaning |
+|---|---|---|
+| `QS_MAX_PER_HOUR` | 30 | also the **minimum gap**: 3600/30 ≈ one request every 2 min, jittered |
+| `QS_MAX_PER_DAY` | 200 | a hard stop for the day |
+
+The hourly figure is spacing, not just a ceiling — a bare cap would permit
+thirty requests inside a minute and then an idle hour, which is the shape that
+drew the limit. **A channel walk counts**: `qs ingest` re-enumerates the whole
+channel each run, and that listing spends from the same allowance as a caption
+fetch. RSS does not count — a podcast CDN wants you to have the file.
+
+Running out mid-run stops with `stopped: "budget"` and keeps what it managed;
+running out before any work refuses outright, since there is no partial run to
+report. Neither is a rate limit and neither starts a cooldown. `qs status`
+shows what is left.
 
 **Things that will waste your time if you don't know them**
 - A `503` from search means the corpus server is stopped, not broken.
