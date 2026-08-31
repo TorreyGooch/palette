@@ -883,15 +883,27 @@ def _words_failure_detail(error: Exception) -> str:
     text = str(error) or error.__class__.__name__
     lowered = text.lower()
     if any(marker in lowered for marker in _SOURCE_REFUSED):
-        return (f"{text}. Word timings need this episode's audio, and the "
-                f"source refused to serve it - a `qs pull` will fail the same "
-                f"way, so this is a wait, not a retry. Never add cookies or a "
-                f"browser user agent to get past it. `context` still works on "
-                f"this episode: it reads the transcript already on disk.")
-    return (f"{text}. Word timings need this episode's audio and it is not "
-            f"stored yet; captions alone are not enough. A `qs pull` on this "
-            f"episode fetches and keeps it (~50 MB), after which words and "
-            f"cuts on it cost no network at all.")
+        headline = (f"{text}. This endpoint needs the episode's audio, and "
+                    f"the source refused to serve it - a `qs pull` will fail "
+                    f"the same way, so this is a wait, not a retry. Never add "
+                    f"cookies or a browser user agent to get past it. "
+                    f"`context` still works here: it reads the transcript "
+                    f"already on disk.")
+    else:
+        headline = (f"{text}. This endpoint needs the episode's audio and it "
+                    f"is not stored yet; captions alone are not enough. A "
+                    f"`qs pull` on this episode fetches and keeps it (~50 MB), "
+                    f"after which words and cuts on it cost no network.")
+    # What this does *not* block, which the bare sentence above implies it
+    # does. A clip already cut from this episode carries its own per-word
+    # timings in the .words.json beside it, so narrowing a beat to a shorter
+    # span is a local file read - no audio, no whisper, no network. Every
+    # `qs cut` clip has one, which makes that the common case, not the
+    # exception: episode audio is for cutting something *new*.
+    return headline + (" This blocks new cuts from the episode, not narrowing "
+                       "a clip you already have: a cut's .words.json carries "
+                       "per-word timings, so re-splitting one by word index "
+                       "needs no audio at all.")
 
 
 @app.get("/api/qs/words")

@@ -171,3 +171,48 @@ def test_a_genuinely_absent_episode_is_still_a_404(monkeypatch):
     with pytest.raises(HTTPException) as raised:
         main.qs_words("NOPE", 0.0, 1.0)
     assert raised.value.status_code == 404
+
+
+# ── what the failure does not block ───────────────────────────────────────────
+#
+# "word timings need this episode's audio" is true of this endpoint and reads
+# as "this quote cannot be subdivided" - which is wrong, and wrong in the
+# common case. Every `qs cut` clip carries a .words.json with per-word timings,
+# so narrowing a beat to a shorter span is a local file read. Episode audio is
+# only needed to cut something new.
+
+@pytest.mark.parametrize("error", [
+    RuntimeError("could not obtain audio for EP"),
+    DownloadError("HTTP Error 403: Forbidden"),
+])
+def test_both_failures_say_an_existing_clip_can_still_be_resplit(monkeypatch,
+                                                                 error):
+    main = _raising(monkeypatch, error)
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("EP", 0.0, 1.0)
+
+    detail = raised.value.detail
+    assert "words.json" in detail
+    assert "no audio at all" in detail
+
+
+def test_resplitting_a_beat_really_does_avoid_audio_and_network(library,
+                                                                monkeypatch):
+    """The claim in that message, checked rather than asserted in prose."""
+    from tests.test_narration import audio_item
+    from palette_app import narration
+
+    item = audio_item(library, "clip.m4a", "aud-1")
+    (library / "media" / "clip.m4a").unlink()      # no audio present at all
+
+    def explode(*a, **k):
+        raise AssertionError("re-splitting must not reach the network")
+
+    monkeypatch.setattr("quotesource.cut.word_map", explode)
+
+    narrow = narration.bind(library / "media", item, 2, 4)
+
+    assert narrow["precision"] == "word"
+    assert narrow["word_count"] == 3
+    assert narrow["duration"] > 0
