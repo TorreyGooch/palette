@@ -518,6 +518,28 @@ the audio file. `attribution.range` is the only field in episode time.
 Every word listed is fully present in the audio; partial words at the
 edges are dropped rather than reported with times that run past the end.
 
+**The manifest is what lets you narrow a quote without re-cutting it.**
+Splitting an existing clip by word range reads that JSON file and nothing
+else — no audio, no whisper, no GPU, no network — while `qs words` and
+`qs cut` operate on the *episode* and therefore need its audio. So:
+
+| you want to | you need |
+|---|---|
+| split or tighten a clip you already cut | its `.words.json`, on disk |
+| cut new boundaries out of the episode | the episode's audio |
+
+Every `qs cut` clip has a manifest, which makes the first row the common
+case. It matters most when the second is impossible: an episode whose audio
+YouTube refuses (403) can still have its existing clips subdivided freely.
+
+**Read the gaps, not the text.** The manifest carries per-word `start` and
+`end`, so the pause between two words is arithmetic. A 20.3s beat was split
+into three by computing them: 700 ms after "hierarchies.", 360 ms after the
+second one, **1360 ms after "strangely,"** — Peterson holding before the
+payload. The obvious split from *reading* the transcript turned out to be
+the weakest pause of the three. Prose cannot show you a hold; only the
+timings can.
+
 ## Transcript from one place, audio from another
 
 A source no longer has to supply both. YouTube gives captions for a few KB and

@@ -72,8 +72,10 @@ in the same way a race in `save_library` is.
   stops instead of shipping it.
 - **Report what actually happened.** `missing[]`, `tail_clean`, `coverage`.
   Partial success that reads as success is the failure mode to design against.
-- **One writer per artifact.** `save_library` is an unlocked whole-file write
-  and three sessions now share this repo.
+- **One writer per artifact.** `save_library` writes atomically and every
+  read-modify-write holds `library_lock`. Anything new that loads the library,
+  changes it and saves it must take that lock too, or it reintroduces the lost
+  update.
 
 ## The harness
 
@@ -111,16 +113,15 @@ exist yet, and is the interesting edge.
 
 ## Known debt, in rough priority
 
-1. `save_library` has no lock — concurrent sessions can clobber each other.
-2. `extract_clips` records no provenance: carved clips do not know their source
+1. `extract_clips` records no provenance: carved clips do not know their source
    item or time range, so they cannot be re-derived and storyboard source
    fields must be typed by hand.
-3. Correcting a cut mints a **new item id**, orphaning every reference to the
+2. Correcting a cut mints a **new item id**, orphaning every reference to the
    old one. Non-destructive means identity survives the edit.
-4. Clip filenames truncate bounds to whole seconds, so a sub-second adjustment
+3. Clip filenames truncate bounds to whole seconds, so a sub-second adjustment
    collides with the file it is replacing.
-5. The storyboard UI does not expose narration beats — the model supports them,
-   the page does not.
-6. `S -> G` has no handoff: nothing carries a board to generation or brings
-   assets back, and generated media has no provenance shape (which beat, which
-   prompt, which model, which seed) to make a re-roll reproducible.
+4. `S -> G` is half a bridge, on purpose. A beat carries a `video_prompt` and
+   it now survives into the rendered PNG, so a board can be handed over. What
+   does not exist is the return: nothing brings an asset back attached to the
+   beat, prompt, model and seed that produced it, so a re-roll is not
+   reproducible.

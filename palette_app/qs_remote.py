@@ -197,7 +197,8 @@ async def adopt_remote_item(root: Path, remote_item: dict,
     at nothing here. They are reapplied by name instead, matching what
     cut_quote/pull do locally.
     """
-    from .library import load_library, new_palette, register_media_file, save_library
+    from .library import (library_lock, load_library, new_palette,
+                          register_media_file, save_library)
 
     filename = remote_item.get("filename")
     if not filename:
@@ -224,30 +225,31 @@ async def adopt_remote_item(root: Path, remote_item: dict,
         root, filename, remote_item.get("title") or filename,
         remote_item.get("url"))
 
-    lib = load_library(root)
-    it = next((i for i in lib["items"] if i["id"] == item["id"]), None)
-    if it is None:
-        return item
+    with library_lock(root):
+        lib = load_library(root)
+        it = next((i for i in lib["items"] if i["id"] == item["id"]), None)
+        if it is None:
+            return item
 
-    for key in ("attribution", "url", "title"):
-        if remote_item.get(key):
-            it[key] = remote_item[key]
-    if got_manifest:
-        it["manifest"] = sidecar
+        for key in ("attribution", "url", "title"):
+            if remote_item.get(key):
+                it[key] = remote_item[key]
+        if got_manifest:
+            it["manifest"] = sidecar
 
-    tags = ["quotesource"] + (["word-cut"] if kind == "cut" else [])
-    if person:
-        tags.append(person)
-    it["tags"] = sorted(set(it.get("tags", []) + tags))
+        tags = ["quotesource"] + (["word-cut"] if kind == "cut" else [])
+        if person:
+            tags.append(person)
+        it["tags"] = sorted(set(it.get("tags", []) + tags))
 
-    if palette_name:
-        pal = next((p for p in lib["palettes"]
-                    if p["name"].lower() == palette_name.lower()), None)
-        if not pal:
-            pal = new_palette(palette_name)
-            lib["palettes"].append(pal)
-        if pal["id"] not in it["palettes"]:
-            it["palettes"].append(pal["id"])
+        if palette_name:
+            pal = next((p for p in lib["palettes"]
+                        if p["name"].lower() == palette_name.lower()), None)
+            if not pal:
+                pal = new_palette(palette_name)
+                lib["palettes"].append(pal)
+            if pal["id"] not in it["palettes"]:
+                it["palettes"].append(pal["id"])
 
-    save_library(root, lib)
+        save_library(root, lib)
     return it

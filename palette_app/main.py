@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_library_path, set_library_path
 from .library import (
-    create_library, load_library, save_library, is_library,
+    create_library, load_library, save_library, is_library, library_lock,
     new_item, new_palette, media_type, register_media_file,
 )
 from .narration import bind as narration_bind, lay_out as narration_layout
@@ -195,89 +195,93 @@ async def import_item(file: UploadFile = File(...)):
 @app.patch("/api/items/{iid}")
 async def update_item(iid: str, body: dict = Body(...)):
     root = _root()
-    lib = load_library(root)
-    item = _find(lib["items"], iid)
-    if not item:
-        raise HTTPException(404, "Item not found")
-    for field in ("title", "tags", "palettes"):
-        if field in body:
-            item[field] = body[field]
-    save_library(root, lib)
+    with library_lock(root):
+        lib = load_library(root)
+        item = _find(lib["items"], iid)
+        if not item:
+            raise HTTPException(404, "Item not found")
+        for field in ("title", "tags", "palettes"):
+            if field in body:
+                item[field] = body[field]
+        save_library(root, lib)
     return item
 
 
 @app.post("/api/items/batch-tag")
 async def batch_tag(body: dict = Body(...)):
     root = _root()
-    lib = load_library(root)
-    ids = set(body.get("item_ids", []))
-    tag = (body.get("tag") or "").strip()
-    action = body.get("action", "add")
-    updated = []
-    for item in lib["items"]:
-        if item["id"] not in ids:
-            continue
-        if action == "add" and tag and tag not in item["tags"]:
-            item["tags"].append(tag)
-            updated.append(item["id"])
-        elif action == "remove" and tag in item["tags"]:
-            item["tags"].remove(tag)
-            updated.append(item["id"])
-    save_library(root, lib)
+    with library_lock(root):
+        lib = load_library(root)
+        ids = set(body.get("item_ids", []))
+        tag = (body.get("tag") or "").strip()
+        action = body.get("action", "add")
+        updated = []
+        for item in lib["items"]:
+            if item["id"] not in ids:
+                continue
+            if action == "add" and tag and tag not in item["tags"]:
+                item["tags"].append(tag)
+                updated.append(item["id"])
+            elif action == "remove" and tag in item["tags"]:
+                item["tags"].remove(tag)
+                updated.append(item["id"])
+        save_library(root, lib)
     return {"updated": updated}
 
 
 @app.post("/api/items/batch-palette")
 async def batch_palette(body: dict = Body(...)):
     root = _root()
-    lib = load_library(root)
-    ids = set(body.get("item_ids", []))
-    pid = body.get("palette_id")
-    action = body.get("action", "add")
-    if not _find(lib["palettes"], pid):
-        raise HTTPException(404, "Palette not found")
-    for item in lib["items"]:
-        if item["id"] not in ids:
-            continue
-        if action == "add" and pid not in item["palettes"]:
-            item["palettes"].append(pid)
-        elif action == "remove" and pid in item["palettes"]:
-            item["palettes"].remove(pid)
-    save_library(root, lib)
+    with library_lock(root):
+        lib = load_library(root)
+        ids = set(body.get("item_ids", []))
+        pid = body.get("palette_id")
+        action = body.get("action", "add")
+        if not _find(lib["palettes"], pid):
+            raise HTTPException(404, "Palette not found")
+        for item in lib["items"]:
+            if item["id"] not in ids:
+                continue
+            if action == "add" and pid not in item["palettes"]:
+                item["palettes"].append(pid)
+            elif action == "remove" and pid in item["palettes"]:
+                item["palettes"].remove(pid)
+        save_library(root, lib)
     return {"ok": True}
 
 
 @app.delete("/api/items/{iid}")
 async def delete_item(iid: str):
     root = _root()
-    lib = load_library(root)
-    item = _find(lib["items"], iid)
-    if not item:
-        raise HTTPException(404)
+    with library_lock(root):
+        lib = load_library(root)
+        item = _find(lib["items"], iid)
+        if not item:
+            raise HTTPException(404)
 
-    remaining = [i for i in lib["items"] if i["id"] != iid]
+        remaining = [i for i in lib["items"] if i["id"] != iid]
 
-    # Several items can point at one file — clip filenames truncate their
-    # bounds to whole seconds, so two cuts a fraction apart collide, and
-    # re-staging the same quote makes another item. Unlinking on the first
-    # delete would leave every other item pointing at nothing, so the media
-    # only goes when its last reference does.
-    if not any(i["filename"] == item["filename"] for i in remaining):
-        media = root / "media" / item["filename"]
-        if media.exists():
-            media.unlink()
-        # The word manifest is part of the clip, not a separate asset; left
-        # behind it just accumulates beside media that no longer exists.
-        sidecar = media.with_suffix(".words.json")
-        if sidecar.exists():
-            sidecar.unlink()
+        # Several items can point at one file — clip filenames truncate their
+        # bounds to whole seconds, so two cuts a fraction apart collide, and
+        # re-staging the same quote makes another item. Unlinking on the first
+        # delete would leave every other item pointing at nothing, so the media
+        # only goes when its last reference does.
+        if not any(i["filename"] == item["filename"] for i in remaining):
+            media = root / "media" / item["filename"]
+            if media.exists():
+                media.unlink()
+            # The word manifest is part of the clip, not a separate asset; left
+            # behind it just accumulates beside media that no longer exists.
+            sidecar = media.with_suffix(".words.json")
+            if sidecar.exists():
+                sidecar.unlink()
 
-    thumb = root / "thumbnails" / f"{iid}.jpg"  # keyed by item id, never shared
-    if thumb.exists():
-        thumb.unlink()
+        thumb = root / "thumbnails" / f"{iid}.jpg"  # keyed by item id, never shared
+        if thumb.exists():
+            thumb.unlink()
 
-    lib["items"] = remaining
-    save_library(root, lib)
+        lib["items"] = remaining
+        save_library(root, lib)
     return {"ok": True}
 
 
@@ -300,35 +304,38 @@ async def create_palette_ep(body: dict = Body(...)):
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "name required")
-    lib = load_library(root)
-    p = new_palette(name)
-    lib["palettes"].append(p)
-    save_library(root, lib)
+    with library_lock(root):
+        lib = load_library(root)
+        p = new_palette(name)
+        lib["palettes"].append(p)
+        save_library(root, lib)
     return p
 
 
 @app.patch("/api/palettes/{pid}")
 async def rename_palette(pid: str, body: dict = Body(...)):
     root = _root()
-    lib = load_library(root)
-    p = _find(lib["palettes"], pid)
-    if not p:
-        raise HTTPException(404)
-    if "name" in body:
-        p["name"] = body["name"]
-    save_library(root, lib)
+    with library_lock(root):
+        lib = load_library(root)
+        p = _find(lib["palettes"], pid)
+        if not p:
+            raise HTTPException(404)
+        if "name" in body:
+            p["name"] = body["name"]
+        save_library(root, lib)
     return p
 
 
 @app.delete("/api/palettes/{pid}")
 async def delete_palette(pid: str):
     root = _root()
-    lib = load_library(root)
-    lib["palettes"] = [p for p in lib["palettes"] if p["id"] != pid]
-    for item in lib["items"]:
-        if pid in item["palettes"]:
-            item["palettes"].remove(pid)
-    save_library(root, lib)
+    with library_lock(root):
+        lib = load_library(root)
+        lib["palettes"] = [p for p in lib["palettes"] if p["id"] != pid]
+        for item in lib["items"]:
+            if pid in item["palettes"]:
+                item["palettes"].remove(pid)
+        save_library(root, lib)
     return {"ok": True}
 
 
@@ -389,11 +396,12 @@ async def extract_clips(iid: str, body: dict = Body(...)):
             continue
         item = await _register_file(root, clip_name, f"{src['title']} clip {n}")
         # inherit tags and palettes from source
-        lib2 = load_library(root)
-        it = _find(lib2["items"], item["id"])
-        it["tags"] = list(src["tags"])
-        it["palettes"] = list(src["palettes"])
-        save_library(root, lib2)
+        with library_lock(root):
+            lib2 = load_library(root)
+            it = _find(lib2["items"], item["id"])
+            it["tags"] = list(src["tags"])
+            it["palettes"] = list(src["palettes"])
+            save_library(root, lib2)
         added.append(it)
 
     return added

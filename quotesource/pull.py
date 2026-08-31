@@ -349,7 +349,7 @@ def pull(episode_id: str, start: float, end: float, mode: str = "audio",
     never looks at it."""
     from palette_app.config import get_library_path
     from palette_app.library import (
-        ensure_library, load_library, save_library, new_palette,
+        ensure_library, library_lock, load_library, save_library, new_palette,
         register_media_file,
     )
 
@@ -470,20 +470,21 @@ def pull(episode_id: str, start: float, end: float, mode: str = "audio",
     item = asyncio.run(register_media_file(lib_root, filename, title))
 
     # attach attribution + palette + tags directly
-    lib = load_library(lib_root)
-    it = next(i for i in lib["items"] if i["id"] == item["id"])
-    it["url"] = _ts_url(url, s)
-    it["attribution"] = attribution
-    it["tags"] = sorted(set(it.get("tags", []) + tags))
+    with library_lock(lib_root):
+        lib = load_library(lib_root)
+        it = next(i for i in lib["items"] if i["id"] == item["id"])
+        it["url"] = _ts_url(url, s)
+        it["attribution"] = attribution
+        it["tags"] = sorted(set(it.get("tags", []) + tags))
 
-    if palette_name:
-        pal = next((p for p in lib["palettes"]
-                    if p["name"].lower() == palette_name.lower()), None)
-        if not pal:
-            pal = new_palette(palette_name)
-            lib["palettes"].append(pal)
-        if pal["id"] not in it["palettes"]:
-            it["palettes"].append(pal["id"])
+        if palette_name:
+            pal = next((p for p in lib["palettes"]
+                        if p["name"].lower() == palette_name.lower()), None)
+            if not pal:
+                pal = new_palette(palette_name)
+                lib["palettes"].append(pal)
+            if pal["id"] not in it["palettes"]:
+                it["palettes"].append(pal["id"])
 
-    save_library(lib_root, lib)
+        save_library(lib_root, lib)
     return it

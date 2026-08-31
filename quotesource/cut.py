@@ -427,7 +427,7 @@ def cut_quote(episode_id: str, start: float, end: float,
     """
     from palette_app.config import get_library_path
     from palette_app.library import (
-        ensure_library, load_library, save_library, new_palette,
+        ensure_library, library_lock, load_library, save_library, new_palette,
         register_media_file,
     )
 
@@ -615,24 +615,25 @@ def cut_quote(episode_id: str, start: float, end: float,
     title = f'“{quote_short}…” — {meta.get("title", episode_id)[:60]}'
     item = asyncio.run(register_media_file(lib_root, filename, title))
 
-    lib = load_library(lib_root)
-    it = next(i for i in lib["items"] if i["id"] == item["id"])
-    it["url"] = _ts_url(url, abs_start)
-    it["attribution"] = attribution
-    it["manifest"] = manifest_path.name
-    tags = ["quotesource", "word-cut"]
-    if person:
-        tags.append(person)
-    it["tags"] = sorted(set(it.get("tags", []) + tags))
-    if palette_name:
-        pal = next((p for p in lib["palettes"]
-                    if p["name"].lower() == palette_name.lower()), None)
-        if not pal:
-            pal = new_palette(palette_name)
-            lib["palettes"].append(pal)
-        if pal["id"] not in it["palettes"]:
-            it["palettes"].append(pal["id"])
-    save_library(lib_root, lib)
+    with library_lock(lib_root):
+        lib = load_library(lib_root)
+        it = next(i for i in lib["items"] if i["id"] == item["id"])
+        it["url"] = _ts_url(url, abs_start)
+        it["attribution"] = attribution
+        it["manifest"] = manifest_path.name
+        tags = ["quotesource", "word-cut"]
+        if person:
+            tags.append(person)
+        it["tags"] = sorted(set(it.get("tags", []) + tags))
+        if palette_name:
+            pal = next((p for p in lib["palettes"]
+                        if p["name"].lower() == palette_name.lower()), None)
+            if not pal:
+                pal = new_palette(palette_name)
+                lib["palettes"].append(pal)
+            if pal["id"] not in it["palettes"]:
+                it["palettes"].append(pal["id"])
+        save_library(lib_root, lib)
 
     result["item_id"] = it["id"]
     return result
