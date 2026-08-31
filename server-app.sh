@@ -110,20 +110,35 @@ update_app() {
 
   if [ "$before" = "$after" ]; then
     echo "already on $after" >&2
-    return 0
+  else
+    echo "updated $before -> $after" >&2
   fi
-  echo "updated $before -> $after" >&2
 
   # Nothing here runs the suite: this environment has no pytest, and the
   # tests ran before the push (hooks/pre-push) and again in CI. If either of
   # those stops being true, this is where the check belongs.
-  if listening; then
-    echo "restarting to pick it up" >&2
-    stop_app || true
-    start_app
-  else
+
+  # What gets restarted is decided by what the app is *serving*, not by
+  # whether HEAD moved. Those are different questions: someone who pulled by
+  # hand and did not restart leaves a process on the old module, and this
+  # would otherwise answer "already on X" and walk past exactly the state
+  # `stale` exists to report. The promise is that the box is current
+  # afterwards, so ask the running app rather than the repo.
+  if ! listening; then
     echo "not running - nothing to restart" >&2
+    return 0
   fi
+
+  local serving
+  serving=$(running_version)
+  if [ -n "$serving" ] && [ "$serving" = "$after" ]; then
+    echo "app already serving $after" >&2
+    return 0
+  fi
+
+  echo "app is serving ${serving:-an unknown build} - restarting onto $after" >&2
+  stop_app || true
+  start_app
 }
 
 # The version a process is serving is fixed when it imports, so a pull does

@@ -86,9 +86,14 @@ It refuses rather than guesses:
 |---|---|
 | tree is dirty | refused, HEAD unmoved — same commit, different code is the failure this exists to catch |
 | checkout has diverged | refused; nothing is merged |
-| already current | says so, changes nothing |
-| moved, app stopped | pulls, reports `nothing to restart` |
-| moved, app running | pulls, restarts, `stale` returns to false |
+| app stopped | pulls, reports `nothing to restart` — it never *starts* one |
+| app serving an older build | restarts onto the new one |
+| app already serving the current build | left alone; a needless restart drops in-flight jobs |
+
+**What decides a restart is the version the app is serving, not whether HEAD
+moved.** Those come apart the moment someone pulls by hand and forgets to
+restart: the repo is current, the process is not, and answering "already on
+X" there would walk straight past the state `stale` exists to report.
 
 This is the same outcome as the desktop's `deploy.ps1`, initiated from
 this side. `deploy.ps1` remains the one that proves *both* machines agree;

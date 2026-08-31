@@ -154,3 +154,126 @@ def test_an_update_never_starts_an_app_that_was_not_running(deployment):
 
     assert "nothing to restart" in result.stderr
     assert "started on" not in result.stderr
+
+
+# ── being current is the promise, not "did HEAD move" ─────────────────────────
+
+FAKE_APP = '''
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+version, port = sys.argv[1], int(sys.argv[2])
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps({"palette": {"version": version}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+'''
+
+
+def free_port():
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture
+def stale_app(tmp_path):
+    """An app that is up, and serving a build the checkout has moved past."""
+    import time
+
+    script = tmp_path / "fake_app.py"
+    script.write_text(FAKE_APP)
+    port = free_port()
+    proc = subprocess.Popen([sys.executable, str(script), "0ldbuild", str(port)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(100):
+        try:
+            import urllib.request
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/qs/status",
+                                   timeout=1).read()
+            break
+        except Exception:
+            time.sleep(0.05)
+    else:
+        proc.kill()
+        pytest.fail("fake app never came up")
+    yield port
+    proc.kill()
+    proc.wait()
+
+
+def test_a_running_app_on_an_older_build_is_restarted_even_when_head_did_not_move(
+        deployment, stale_app, tmp_path):
+    """The state `stale` reports: someone pulled by hand and never restarted.
+
+    Answering "already on X" and walking away would leave the box serving the
+    old module while claiming to be current - which is the whole failure this
+    script family exists to prevent.
+
+    Only the decision is asserted. Actually restarting needs tmux and a real
+    app; the fake one here keeps its socket, so stop_app times out and
+    start_app then finds something already listening. That costs this test
+    about ten seconds and buys the branch being exercised at all.
+    """
+    _, server = deployment
+    url_file = tmp_path / "api-url"
+    url_file.write_text(f"http://127.0.0.1:{stale_app}\n")
+
+    result = run_update(server, PALETTE_PORT=str(stale_app),
+                        PALETTE_URL_FILE=str(url_file),
+                        PALETTE_PYTHON=sys.executable)
+
+    assert "already on" in result.stderr, result.stderr
+    assert "0ldbuild" in result.stderr, "it should say what is actually running"
+    assert "restarting onto" in result.stderr
+
+
+def test_an_app_already_serving_the_current_build_is_left_alone(
+        deployment, tmp_path):
+    """Restarting a correct process would drop in-flight jobs for nothing."""
+    import time
+
+    _, server = deployment
+    current = head(server)
+
+    script = tmp_path / "fake_app.py"
+    script.write_text(FAKE_APP)
+    port = free_port()
+    proc = subprocess.Popen([sys.executable, str(script), current, str(port)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(100):
+            try:
+                import urllib.request
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/api/qs/status",
+                                       timeout=1).read()
+                break
+            except Exception:
+                time.sleep(0.05)
+        url_file = tmp_path / "api-url"
+        url_file.write_text(f"http://127.0.0.1:{port}\n")
+
+        result = run_update(server, PALETTE_PORT=str(port),
+                            PALETTE_URL_FILE=str(url_file),
+                            PALETTE_PYTHON=sys.executable)
+    finally:
+        proc.kill()
+        proc.wait()
+
+    assert result.returncode == 0, result.stderr
+    assert f"already serving {current}" in result.stderr
+    assert "restarting" not in result.stderr
