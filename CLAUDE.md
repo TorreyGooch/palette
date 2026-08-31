@@ -82,16 +82,43 @@ curl -s 'http://127.0.0.1:7861/api/qs/status' | jq '.totals, .embeddings'
 
 # 3. search, read context, cut - all through the local app, which forwards
 curl -s 'http://127.0.0.1:7861/api/qs/search?q=<phrase>&limit=5'
+
+# keyword search is the SAME endpoint with mode=grep - there is no /api/qs/grep
+curl -s 'http://127.0.0.1:7861/api/qs/search?q=%22exact+phrase%22&mode=grep'
 ```
+
+**`mode=grep` is the fallback when the GPU is unavailable.** Semantic search
+needs CUDA and the embedding model; grep is FTS5 over SQLite, on the CPU. A
+cuBLAS failure therefore takes out one and not the other, and a session that
+read a CUDA error as "the corpus is unreachable" stopped with a working search
+path one parameter away. A semantic failure now names this in its message.
 
 Everything under `/api/qs/*` on **:7861** works whether the corpus is local
 or remote; that is the whole point of the bridge. Prefer it to the CLI.
 
-**What is in the corpus right now:** ~3,034 episodes. Searchable (captions or
-whisper): Jordan Peterson (1,079), Lex Fridman (560), Dwarkesh (125). 423k
-chunks, 100% embedded with `bge-large-en-v1.5`. Lex's transcripts are
-human-made and punctuated; Peterson's are mostly YouTube auto-captions, so
-expect missing punctuation and the occasional mis-hearing there.
+**What is in the corpus right now:** ~3,291 episodes, 458,830 chunks, fully
+embedded with `bge-large-en-v1.5`. Searchable (captions or whisper):
+
+| source | episodes |
+|---|---|
+| `jordanpeterson` | 1,079 |
+| `lexfridman` | 560 |
+| `levin_yt` | 177 |
+| `dwarkesh_yt` | 125 |
+| `vervaeke_amc` | 50 — *Awakening from the Meaning Crisis* |
+| `guest_daniel_dennett`, `guest_randolph_m_nesse`, `guest_james_a_shapiro` | 10 each |
+
+Ask `/api/qs/status` rather than trusting this table; it drifts with every
+ingest, and the endpoint is derived from the corpus itself.
+
+**Transcript quality does not follow the source, and `transcript_source:
+manual` does not mean a human wrote it** — creators routinely upload an
+unedited auto-caption dump as a manual track. Within *one* source you can
+find both "Plato is deeply influenced by the natural philosophers" and "my my
+contention and what i'm going to argue is it's no coincidence". Lex's are
+generally human-made and punctuated and Peterson's are mostly auto-captions,
+but treat that as a prior, not a guarantee: **verify wording with `context`
+before quoting anything.**
 
 Audio-only, **not yet searchable** — ingested from podcast feeds, which carry
 no captions, so each needs whisper before `qs search` can find it: the Jordan
@@ -126,6 +153,7 @@ overrides the search.
 | `qs sources list\|add\|remove` | registry (`sources.yaml` at the data root, hand-editable) |
 | `qs ingest <source-id> [--limit N] [--min-duration 30m]` / `--all` | fetch episode metadata + captions; idempotent, throttled, resumable |
 | `qs guest add <url>... --person X` / `qs guest list` | add single episodes by URL, grouped by person |
+| `qs guest remove <ep-id>... [--yes]` | take one episode back out. **Dry by default** — reports what it would delete; `--yes` applies |
 | `qs episodes <source-id>` | per-episode transcript status |
 | `qs status` | corpus totals, index size, embedding coverage, disk |
 | `qs index [--rebuild]` | chunk + FTS index; incremental (transcript-hash keyed) |
@@ -150,7 +178,8 @@ upload_date, url, url_ts}`. `qs search` JSON wraps hits with `coverage`
 Errors: `{"error": msg}` on stderr, exit 1 (2 for usage).
 
 **The `/api/qs/*` endpoints on :7861 are the primary interface, not a
-mirror.** They cover `status`, `search`, `words`, `context`, `pull`, `cut`,
+mirror.** They cover `status`, `search` (semantic, or keyword with
+`mode=grep`), `words`, `context`, `pull`, `cut`,
 `warm`, `discard` and `server`, work identically whether the corpus is local
 or remote, and — unlike the CLI — put the resulting clip in *this* machine's
 library. Reach for the CLI only for corpus maintenance: `ingest`, `index`,
@@ -181,6 +210,19 @@ of a source whose `people` list names someone as that person's, so
   `/live/` and bare ids all work.
 - Adding the same episode twice is free — it is skipped unless the previous
   attempt left it `captions_pending`.
+- **Two uploads of one talk are a different problem**, since they carry
+  different video ids and `--min-duration` does not apply to an `episodes`
+  source. `add` now warns when an incoming episode matches one already there
+  on duration (within 5s) *and* title (≥0.85), reporting `possible_duplicate`
+  on the row. It warns and never refuses — two conference talks can
+  legitimately run to the same second.
+- **`qs guest remove` is the undo.** It reports before it acts: without
+  `--yes` nothing is deleted and you see the path, file count, bytes, and
+  whether the episode has `stored_audio` — which is the expensive part, since
+  captions refetch in seconds and audio is ~50 MB through a throttled pipe.
+  Applying also clears the episode's rows from the index, because search
+  returning quotes from something no longer on disk would be worse than not
+  removing it at all.
 - It goes through the same backoff as a bulk ingest, so it inherits the jitter
   and reports `rate_limited` rather than opening a second unthrottled path.
 - `uploader` records which show it came from, at no extra cost.
@@ -259,7 +301,8 @@ flag**:
 - **Only pass `--mode av` when you need the picture.** Same quote, ~50x the
   data. Narration needs sound.
 - **Episode audio is kept, not cached** — it lands beside the episode as
-  `audio.*` under a 40 GB ceiling (~1,250 episodes). Measured: a second cut
+  `audio.*` under an 80 GB ceiling (~2,500 episodes; `QS_AUDIO_STORE_GB`,
+  and see the tunables below). Measured: a second cut
   from a stored episode moved 28 KB, not 88 MB.
 - It is also what `qs transcribe` consumes, so pulling a quote pre-stages
   that episode for whisper.

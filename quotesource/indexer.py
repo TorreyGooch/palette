@@ -47,6 +47,50 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 """
 
 
+def forget_episode(con: sqlite3.Connection, episode_id: str) -> int:
+    """Remove every trace of one episode from the index. Returns chunks dropped.
+
+    Three tables hang off a chunk and deleting from one is not deleting from
+    the others:
+
+      chunks_fts   is an external-content FTS5 table, so a plain DELETE on
+                   chunks leaves its terms pointing at rowids that no longer
+                   exist. It has to be told, in its own syntax, first.
+      embeddings   is keyed on chunk_id and declares a foreign key, but
+                   SQLite does not enforce one unless asked - so vectors
+                   simply outlive their chunks.
+
+    That second one is where the orphaned vectors came from: re-indexing an
+    episode whose transcript changed (a whisper backfill, say) mints new
+    chunk ids and stranded every old vector, which is what pushed reported
+    coverage above 1.0. Deleting a chunk without its vector is an incomplete
+    delete, not a policy choice, so it happens here in one place.
+    """
+    # An index that was never built has no tables to clear, and building one
+    # here to discover that would be a write on what is otherwise a read.
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                       "AND name='chunks'").fetchone():
+        return 0
+    dropped = con.execute(
+        "SELECT COUNT(*) FROM chunks WHERE episode_id=?", (episode_id,)
+    ).fetchone()[0]
+    con.execute(
+        "INSERT INTO chunks_fts(chunks_fts, rowid, text) "
+        "SELECT 'delete', id, text FROM chunks WHERE episode_id=?", (episode_id,))
+    # embeddings is the embedder's table, not this module's, so it may simply
+    # not exist yet on an index that has never been embedded. Asked for, not
+    # assumed - and not created here either, since owning a table means
+    # owning its schema.
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                   "AND name='embeddings'").fetchone():
+        con.execute(
+            "DELETE FROM embeddings WHERE chunk_id IN "
+            "(SELECT id FROM chunks WHERE episode_id=?)", (episode_id,))
+    con.execute("DELETE FROM chunks WHERE episode_id=?", (episode_id,))
+    con.execute("DELETE FROM episodes WHERE episode_id=?", (episode_id,))
+    return dropped
+
+
 def _ensure_schema(con: sqlite3.Connection):
     con.executescript(SCHEMA)
 
@@ -121,14 +165,7 @@ def build_index(rebuild: bool = False, quiet: bool = True) -> dict:
             chunks = chunk_segments(transcript.get("segments", []))
 
             # replace any previous rows for this episode
-            old = [r[0] for r in con.execute(
-                "SELECT id FROM chunks WHERE episode_id=?", (episode_id,))]
-            for cid in old:
-                con.execute(
-                    "INSERT INTO chunks_fts(chunks_fts, rowid, text) "
-                    "SELECT 'delete', id, text FROM chunks WHERE id=?", (cid,))
-            con.execute("DELETE FROM chunks WHERE episode_id=?", (episode_id,))
-            con.execute("DELETE FROM episodes WHERE episode_id=?", (episode_id,))
+            forget_episode(con, episode_id)
 
             con.execute(
                 "INSERT INTO episodes VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -152,8 +189,7 @@ def build_index(rebuild: bool = False, quiet: bool = True) -> dict:
 
     # drop episodes whose transcript disappeared
     for episode_id in set(known) - seen:
-        con.execute("DELETE FROM chunks WHERE episode_id=?", (episode_id,))
-        con.execute("DELETE FROM episodes WHERE episode_id=?", (episode_id,))
+        forget_episode(con, episode_id)
         stats["removed"] += 1
     con.commit()
 

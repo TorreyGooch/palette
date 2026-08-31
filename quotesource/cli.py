@@ -55,21 +55,36 @@ def cmd_sources(args):
     if args.action == "list":
         _out(registry.list_sources(), args.pretty)
     elif args.action == "add":
-        if not (args.id and args.name and args.type and args.url):
-            _fail("add requires --id --name --type --url", 2)
+        # Typing the natural positional form used to produce "unrecognized
+        # arguments:" followed by every argument passed - which names what
+        # was ignored and never what was wanted, and made --pretty look
+        # rejected too because it was in the list. Both forms work now, and
+        # what is missing is named either way.
+        rest = list(getattr(args, "rest", None) or [])
+        fields = {}
+        for i, key in enumerate(("id", "name", "type", "url")):
+            fields[key] = getattr(args, key) or (rest[i] if len(rest) > i else None)
+        missing = [f"--{k}" for k in ("id", "name", "type", "url")
+                   if not fields[k]]
+        if missing:
+            _fail(f"sources add needs {' '.join(missing)}  "
+                  f"(or positionally: qs sources add <id> <name> <type> <url>)",
+                  2)
         entry = registry.add_source(
-            args.id, args.name, args.type, args.url,
+            fields["id"], fields["name"], fields["type"], fields["url"],
             people=args.people, notes=args.notes or "",
             min_duration=args.min_duration,
         )
         _out(entry, args.pretty)
     elif args.action == "remove":
-        if not args.id:
-            _fail("remove requires --id", 2)
-        ok = registry.remove_source(args.id)
+        rest = list(getattr(args, "rest", None) or [])
+        source_id = args.id or (rest[0] if rest else None)
+        if not source_id:
+            _fail("sources remove needs --id (or: qs sources remove <id>)", 2)
+        ok = registry.remove_source(source_id)
         if not ok:
-            _fail(f"source '{args.id}' not found")
-        _out({"removed": args.id}, args.pretty)
+            _fail(f"source '{source_id}' not found")
+        _out({"removed": source_id}, args.pretty)
 
 
 def _guest_source_id(person: str) -> str:
@@ -87,11 +102,36 @@ def cmd_guest(args):
     findable later.
     """
     from . import registry
-    from .ingest import add_episode, _pause
+    from .ingest import add_episode, remove_episode, _pause
 
     if args.action == "list":
         _out([s for s in registry.list_sources() if s.get("type") == "episodes"],
              args.pretty)
+        return
+
+    if args.action == "remove":
+        # Dry by default. What is in here can cost an hour of throttled
+        # fetching to replace, so the removal is shown before it is done.
+        if not args.urls:
+            _fail("guest remove requires at least one episode id or URL", 2)
+        from .ingest import youtube_id
+
+        removed, results = 0, []
+        for value in args.urls:
+            episode_id = youtube_id(value) or value
+            try:
+                row = remove_episode(episode_id, source_id=args.source_id,
+                                     apply=args.yes)
+                results.append(row)
+                removed += 1 if args.yes else 0
+            except Exception as e:
+                results.append({"episode_id": episode_id, "error": str(e)})
+        out = {"removed": removed, "episodes": results}
+        if not args.yes:
+            out["note"] = "dry run - nothing was removed. Pass --yes to apply."
+        else:
+            out["next"] = "run `qs embed` if you want coverage recomputed"
+        _out(out, args.pretty)
         return
 
     if not args.urls:
@@ -342,10 +382,16 @@ def cmd_status(args):
     from .status import corpus_status
 
     data = corpus_status()
+    # The ./qs wrapper hunts for an interpreter that actually has the deps;
+    # an ad-hoc `python3 -c` does not, and fails with ModuleNotFoundError on
+    # something the wrapper imports fine. Naming the one in use turns that
+    # into a one-line answer instead of an investigation.
+    data["python"] = sys.executable
     if not args.pretty:
         _out(data, False)
         return
     print(f"data root: {data['data_root']}")
+    print(f"python: {data['python']}")
     print(f"disk: {data['disk']['total_mb']} MB")
     idx = data.get("index") or {}
     if idx.get("exists"):
@@ -452,6 +498,9 @@ def main(argv=None):
 
     p = sub.add_parser("sources", help="manage the source registry", parents=[shared])
     p.add_argument("action", choices=["list", "add", "remove"])
+    p.add_argument("rest", nargs="*",
+                   help="for add: <id> <name> <type> <url>, if you prefer "
+                        "positionals to flags")
     p.add_argument("--id")
     p.add_argument("--name")
     p.add_argument("--type", choices=["youtube_channel", "youtube_playlist",
@@ -465,8 +514,11 @@ def main(argv=None):
 
     p = sub.add_parser("guest", parents=[shared],
                        help="add single episodes by URL, grouped by person")
-    p.add_argument("action", choices=["add", "list"])
-    p.add_argument("urls", nargs="*", help="YouTube video URLs (or bare ids)")
+    p.add_argument("action", choices=["add", "list", "remove"])
+    p.add_argument("urls", nargs="*",
+                   help="YouTube video URLs (or bare ids); ids for remove")
+    p.add_argument("--yes", action="store_true",
+                   help="actually remove; without it `remove` only reports")
     p.add_argument("--person", help="who this is worth quoting for")
     p.add_argument("--source-id", help="override the derived guest_<person> id")
     p.add_argument("--notes")

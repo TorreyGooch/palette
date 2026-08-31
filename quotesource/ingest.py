@@ -18,6 +18,7 @@ import json
 import os
 import random
 import re
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -185,13 +186,155 @@ def add_episode(url: str, source: dict, quiet: bool = False) -> dict:
              "url": f"https://www.youtube.com/watch?v={episode_id}",
              "title": "", "duration": None}
     meta, hit_limit = _fetch_with_backoff(source, entry, quiet)
-    return {"source": source["id"], "episode_id": episode_id,
-            "title": meta.get("title"),
-            "show": meta.get("uploader"),
-            "upload_date": meta.get("upload_date"),
-            "duration": meta.get("duration"),
-            "status": meta.get("status"),
-            "already_had_it": False, "rate_limited": hit_limit}
+    row = {"source": source["id"], "episode_id": episode_id,
+           "title": meta.get("title"),
+           "show": meta.get("uploader"),
+           "upload_date": meta.get("upload_date"),
+           "duration": meta.get("duration"),
+           "status": meta.get("status"),
+           "already_had_it": False, "rate_limited": hit_limit}
+    # Reported at add time, while fixing it is still one `guest remove` away
+    # rather than a re-transcription later.
+    twin = find_duplicate(source, episode_id, meta.get("title"),
+                          meta.get("duration"))
+    if twin:
+        row["possible_duplicate"] = twin
+        _log(quiet, f"{episode_id}  looks like a duplicate of "
+                    f"{twin['episode_id']} ({twin['title_ratio']} title match, "
+                    f"same duration) - check before indexing")
+    return row
+
+
+DUPLICATE_TITLE_RATIO = 0.85
+DUPLICATE_DURATION_S = 5.0
+
+
+def find_duplicate(source: dict, episode_id: str, title: str,
+                   duration) -> dict | None:
+    """An episode already in this source that looks like the same recording.
+
+    `--min-duration` keeps clip re-uploads out of a *channel* source, but an
+    `episodes` source has no feed and no such filter, and two uploads of one
+    talk carry different video ids - so nothing noticed. The case that
+    prompted this was one 109-minute lecture added twice, where the copy that
+    was kept turned out to be the one with no captions.
+
+    Warned about, never refused. Two conference talks by the same person can
+    legitimately run to the same second, and a guest source is hand-curated
+    precisely because the judgement is a person's.
+    """
+    import difflib
+
+    if not duration:
+        return None
+    base = ensure_root() / "episodes" / source["id"]
+    if not base.is_dir():
+        return None
+    from .feedaudio import _norm_title
+
+    wanted = _norm_title(title or "")
+    for ep_dir in sorted(p for p in base.iterdir() if p.is_dir()):
+        if ep_dir.name == episode_id:
+            continue
+        meta = load_metadata(ep_dir) or {}
+        other = meta.get("duration")
+        if not other or abs(float(other) - float(duration)) > DUPLICATE_DURATION_S:
+            continue
+        ratio = difflib.SequenceMatcher(
+            None, wanted, _norm_title(meta.get("title") or "")).ratio()
+        if ratio >= DUPLICATE_TITLE_RATIO:
+            return {"episode_id": ep_dir.name, "title": meta.get("title"),
+                    "status": meta.get("status"), "duration": other,
+                    "title_ratio": round(ratio, 3)}
+    return None
+
+
+def find_episode(episode_id: str, source_id: str = None) -> tuple[dict, Path]:
+    """Which source holds this episode, and where. Raises if it is not found.
+
+    Searched rather than asked for, because the id is the thing a person has
+    to hand - it is in the URL, in a search hit, in a clip's attribution -
+    while the source it landed under is a detail of how it was added.
+    """
+    sources = ([registry.get_source(source_id)] if source_id
+               else registry.list_sources())
+    for source in sources:
+        if not source:
+            continue
+        ep_dir = episode_dir(source["id"], episode_id)
+        if ep_dir.is_dir():
+            return source, ep_dir
+    where = f" in source '{source_id}'" if source_id else ""
+    raise LookupError(f"episode '{episode_id}' is not in the corpus{where}")
+
+
+def remove_episode(episode_id: str, source_id: str = None,
+                   apply: bool = False) -> dict:
+    """Take one episode back out of the corpus. Reports before it acts.
+
+    `qs guest add` could add an episode and nothing could remove one, so a
+    hand-curated source had no hand-curated undo: correcting a single wrong
+    pick meant dropping the whole source and re-adding everything else. The
+    case that forced it was two uploads of one lecture under different video
+    ids, where the copy that was kept turned out to have no captions.
+
+    **Dry by default.** Without `apply` nothing is deleted and the report says
+    what would be - deletions are worth seeing before they happen, and the
+    audio in here can cost an hour of throttled fetching to replace.
+
+    The index is cleaned in the same breath. Leaving the chunks behind would
+    be worse than not removing the episode at all: search would go on
+    returning quotes from something no longer on disk and no longer cuttable.
+    """
+    source, ep_dir = find_episode(episode_id, source_id)
+    meta = load_metadata(ep_dir) or {}
+
+    files = sorted(p for p in ep_dir.rglob("*") if p.is_file())
+    audio = [p for p in files if p.stem == "audio"]
+    report = {
+        "episode_id": episode_id,
+        "source": source["id"],
+        "title": meta.get("title"),
+        "status": meta.get("status"),
+        "path": str(ep_dir),
+        "files": len(files),
+        "bytes": sum(p.stat().st_size for p in files),
+        # Called out on its own because it is the expensive part: captions
+        # are a few KB and refetch in seconds, audio is ~50 MB through a
+        # throttled pipe.
+        "stored_audio": [p.name for p in audio],
+        "applied": bool(apply),
+    }
+
+    from .indexer import connect, db_path, forget_episode
+
+    # Opening the database would create it, so a dry run against a corpus
+    # that has never been indexed must not look. Read paths do not write.
+    indexed = db_path().exists()
+
+    if not apply:
+        report["chunks_indexed"] = 0
+        if indexed:
+            con = connect()
+            row = con.execute(
+                "SELECT COUNT(*) FROM chunks WHERE episode_id=?",
+                (episode_id,)).fetchone() if con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='chunks'").fetchone() else (0,)
+            report["chunks_indexed"] = row[0]
+            con.close()
+        report["note"] = "nothing removed; pass --yes to apply"
+        return report
+
+    report["chunks_removed"] = 0
+    if indexed:
+        con = connect()
+        report["chunks_removed"] = forget_episode(con, episode_id)
+        con.commit()
+        con.close()
+
+    shutil.rmtree(ep_dir)
+    return report
 
 
 def _enumerate_episodes_source(source: dict) -> list[dict]:
