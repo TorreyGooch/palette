@@ -104,27 +104,32 @@ def no_sleeping(monkeypatch):
     monkeypatch.setattr(ingest.time, "sleep", lambda *_: None)
 
 
-def test_a_clean_fetch_reports_that_it_was_not_limited(monkeypatch, no_sleeping):
+def test_a_clean_fetch_returns_the_metadata(monkeypatch, no_sleeping):
     monkeypatch.setattr(ingest, "_fetch_youtube_episode",
                         lambda *a, **k: {"ok": True})
-    meta, hit = ingest._fetch_with_backoff({"id": "s"}, {"episode_id": "e"}, True)
+    meta = ingest._fetch_with_backoff({"id": "s"}, {"episode_id": "e"}, True)
     assert meta == {"ok": True}
-    assert hit is False
 
 
-def test_a_fetch_that_recovers_still_admits_it_was_limited(monkeypatch, no_sleeping):
-    """The endpoint already asked us to slow down; success does not undo that."""
+def test_a_rate_limit_is_never_knocked_on_twice(monkeypatch, no_sleeping):
+    """The old schedule knocked three more times over fourteen minutes.
+
+    Four attempts per episode - immediate, then 60s, 180s, 600s - all after
+    the endpoint had already said we were asking too often. Retrying a 429 is
+    the behaviour limiters escalate against.
+    """
     calls = {"n": 0}
 
-    def flaky(*a, **k):
+    def limited_then_fine(*a, **k):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("HTTP Error 429: Too Many Requests")
         return {"ok": True}
 
-    monkeypatch.setattr(ingest, "_fetch_youtube_episode", flaky)
-    _, hit = ingest._fetch_with_backoff({"id": "s"}, {"episode_id": "e"}, True)
-    assert hit is True
+    monkeypatch.setattr(ingest, "_fetch_youtube_episode", limited_then_fine)
+    with pytest.raises(ingest.RateLimited):
+        ingest._fetch_with_backoff({"id": "s"}, {"episode_id": "e"}, True)
+    assert calls["n"] == 1, "it must not ask a second time"
 
 
 def test_exhausting_the_schedule_raises_rate_limited(monkeypatch, no_sleeping):
@@ -187,27 +192,42 @@ def limited():
     return RuntimeError("HTTP Error 429: Too Many Requests")
 
 
-def test_consecutive_rate_limits_stop_the_run(run_ingest):
-    """The bug this fixes: the loop used to walk the whole channel retrying."""
-    result, seen = run_ingest({"a": limited(), "b": limited(),
-                               "c": None, "d": None, "e": None})
+def test_one_rate_limit_stops_the_run(run_ingest):
+    """One is enough, and it was not.
+
+    A hard 429 during a levin_yt batch left the breaker sitting at 1 of 2, and
+    the run fetched twenty more episodes after being told to stop. RFC 6585:
+    a 429 says *this client* has sent too many requests. The server is healthy
+    and rationing us specifically, so the next request is the one that gets
+    the limit extended.
+    """
+    result, seen = run_ingest({"a": limited(), "b": None, "c": None})
+
     assert result["stopped"] == "rate_limited"
-    assert seen == ["a", "b"]           # c, d, e were never requested
+    assert result["rate_limited"] is True
+    assert seen == ["a"], "nothing may be requested after a limit"
+
+
+def test_a_success_after_a_limit_does_not_excuse_it(run_ingest):
+    """The hole that made the old breaker unarmable.
+
+    The count reset on any success, so an alternating limited/served pattern -
+    the ordinary shape of a soft limit - could never trip it. The breaker was
+    weakest exactly where it was most needed.
+    """
+    result, seen = run_ingest({"a": limited(), "b": None, "c": limited(),
+                               "d": None, "e": None})
+
+    assert result["stopped"] == "rate_limited"
+    assert seen == ["a"]
 
 
 def test_a_completed_run_says_it_was_not_stopped(run_ingest):
     result, seen = run_ingest({"a": None, "b": None, "c": None})
     assert result["stopped"] is None
+    assert result["rate_limited"] is False
     assert result["new"] == 3
     assert seen == ["a", "b", "c"]
-
-
-def test_a_success_between_limits_resets_the_count(run_ingest):
-    """One 429, then recovery, is a blip - not a reason to abandon the run."""
-    result, seen = run_ingest({"a": limited(), "b": None, "c": limited(),
-                               "d": None, "e": None})
-    assert result["stopped"] is None
-    assert seen == ["a", "b", "c", "d", "e"]
 
 
 def test_ordinary_failures_never_trip_the_breaker(run_ingest):
@@ -216,35 +236,28 @@ def test_ordinary_failures_never_trip_the_breaker(run_ingest):
                                "b": ValueError("no captions"),
                                "c": ValueError("no captions")})
     assert result["stopped"] is None
+    assert result["rate_limited"] is False
     assert result["failed"] == 3
     assert seen == ["a", "b", "c"]
 
 
-def test_an_ordinary_failure_between_limits_does_not_shield_them(run_ingest):
-    """Only a success clears the count - a different error is not a reprieve.
+def test_rate_limited_is_reported_separately_from_stopped(run_ingest):
+    """`stopped: null` was read as "no rate limiting" and never meant that.
 
-    Otherwise a channel that alternates 429s with caption-less videos would
-    never trip the breaker and would grind on indefinitely.
+    It only ever meant "no two consecutive failures". Two questions, two
+    fields - and this is the one to check before believing a run was clean.
     """
-    result, seen = run_ingest({"a": limited(), "b": ValueError("no captions"),
-                               "c": limited(), "d": None})
-    assert result["stopped"] == "rate_limited"
-    assert seen == ["a", "b", "c"]
+    clean, _ = run_ingest({"a": None})
+    assert clean["stopped"] is None and clean["rate_limited"] is False
 
-
-def test_the_threshold_is_tunable(run_ingest, monkeypatch):
-    monkeypatch.setattr(ingest, "RATE_LIMIT_STOP", 3)
-    result, seen = run_ingest({"a": limited(), "b": limited(),
-                               "c": limited(), "d": None})
-    assert result["stopped"] == "rate_limited"
-    assert seen == ["a", "b", "c"]
+    hit, _ = run_ingest({"z": limited()})
+    assert hit["stopped"] == "rate_limited" and hit["rate_limited"] is True
 
 
 def test_a_stopped_run_still_reports_what_it_managed(run_ingest):
-    result, _ = run_ingest({"a": None, "b": limited(), "c": limited(),
-                            "d": None})
+    result, _ = run_ingest({"a": None, "b": limited(), "c": None, "d": None})
     assert result["new"] == 1
-    assert result["failed"] == 2
+    assert result["failed"] == 1
     assert result["episodes"] == ["a"]
 
 
@@ -325,5 +338,4 @@ def test_a_rate_limited_failure_is_recorded_as_one(run_ingest):
     result, _ = run_ingest({"a": limited(), "b": limited()})
 
     assert result["stopped"] == "rate_limited"
-    assert [f["kind"] for f in result["failures"]] == ["rate_limited",
-                                                       "rate_limited"]
+    assert [f["kind"] for f in result["failures"]] == ["rate_limited"]

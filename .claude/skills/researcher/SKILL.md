@@ -86,14 +86,24 @@ Two things the code now does for you, which you should still understand:
   exact interval, because a metronomic cadence over hundreds of requests is the
   clearest automation signature there is. `sleep_interval_requests` also spaces
   yt-dlp's own requests inside a single episode fetch.
-- **There is a circuit breaker.** After two *consecutive* rate-limited episodes
-  the whole run stops and sets `stopped: "rate_limited"` in its result. Only a
-  successful fetch clears that count — an ordinary failure, such as a video
-  with no captions, is not evidence that a limit has lifted.
+- **One rate limit ends the run, and there is no second knock.** A 429 says
+  *this client* is asking too often; the server is healthy and rationing you.
+  Retrying is what limiters escalate against, so nothing is retried after one.
+  Timeouts and 5xx still retry — those are somebody else's problem, not
+  evidence about you.
+- **The cooldown outlives the run.** A limit writes `youtube-cooldown.json`
+  at the data root, and `ingest` and `guest add` refuse until it expires
+  (6h by default, or whatever `Retry-After` said). Stopping a run was never
+  the same as not going back, and a fresh run two minutes later used to be
+  possible. `qs status` tells you whether one is active.
+- **Do not set `QS_IGNORE_COOLDOWN=1`.** It exists so the standoff is a
+  decision rather than a wall, and using it is asking to be limited harder.
+  If you think you need it, stop and ask.
 
-**Always check `stopped` before believing a run finished.** `null` means the
-list was worked through; `"rate_limited"` means it gave up early and there is
-more to do.
+**Check `rate_limited`, not `stopped`.** They answer different questions:
+`stopped` says the run ended early, `rate_limited` says a limit was seen at
+all. Reporting `stopped: null` as evidence a run was clean is a mistake that
+has already been made.
 
 Operating rules that still matter:
 
@@ -108,10 +118,12 @@ Operating rules that still matter:
 
 ## Escalation — stop rather than proceed
 
-- **HTTP 429.** The run stops itself after two consecutive ones. Do not
-  immediately start it again — report how far you got and leave it a day.
-  Ingest is resumable and skips what it already has, so waiting costs only
-  time.
+- **HTTP 429.** The run stops itself on the first one and starts a cooldown
+  you cannot ingest through. Report how far you got and leave it. Ingest is
+  resumable and skips what it already has, so waiting costs only time.
+  **Density is what trips it**: a hard limit arrived at ~120 requests in 25
+  minutes, well under the ~300/day that had been the working figure. Spread
+  a large channel over days, in small batches, with gaps between them.
 - **Two offset probes disagree.** Ads were inserted mid-episode and no single
   number is right. Leave the episode on its YouTube audio rather than giving it
   a figure that is correct in one half. A wrong offset produces a fluent clip

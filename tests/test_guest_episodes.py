@@ -133,23 +133,35 @@ def test_a_pending_episode_is_retried(corpus, monkeypatch):
     assert again["status"] == "captions"
 
 
-def test_adding_an_episode_goes_through_the_same_backoff(corpus, monkeypatch):
-    """It must inherit the politeness, not open a second unthrottled path."""
+def test_adding_an_episode_stops_on_a_rate_limit_rather_than_retrying(
+        corpus, monkeypatch):
+    """It inherits the politeness, and the politeness is now "do not knock"."""
     monkeypatch.setattr(ingest.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(ingest, "BACKOFF_SCHEDULE", [1])
     calls = {"n": 0}
 
-    def flaky(source, entry, quiet):
+    def limited(source, entry, quiet):
         calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("HTTP Error 429: Too Many Requests")
-        return fake_fetch()(source, entry, quiet)
+        raise RuntimeError("HTTP Error 429: Too Many Requests")
 
-    monkeypatch.setattr(ingest, "_fetch_youtube_episode", flaky)
-    row = ingest.add_episode("https://youtu.be/PWasTAtR6Ns", guest_source(),
-                             quiet=True)
-    assert row["rate_limited"] is True
-    assert row["status"] == "captions"
+    monkeypatch.setattr(ingest, "_fetch_youtube_episode", limited)
+    with pytest.raises(ingest.RateLimited):
+        ingest.add_episode("https://youtu.be/PWasTAtR6Ns", guest_source(),
+                           quiet=True)
+    assert calls["n"] == 1, "one refusal, one attempt"
+
+
+def test_adding_an_episode_is_refused_while_a_cooldown_is_active(corpus,
+                                                                 monkeypatch):
+    """A single URL is still a YouTube request, so it obeys the same standoff."""
+    called = []
+    monkeypatch.setattr(ingest, "_fetch_youtube_episode",
+                        lambda *a, **k: called.append(1))
+    ingest.begin_cooldown(RuntimeError("HTTP Error 429"), "guest_x")
+
+    with pytest.raises(ingest.InCooldown):
+        ingest.add_episode("https://youtu.be/PWasTAtR6Ns", guest_source(),
+                           quiet=True)
+    assert called == []
 
 
 # ── the episodes source type ──────────────────────────────────────────────────

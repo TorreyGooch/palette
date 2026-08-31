@@ -353,19 +353,40 @@ bulk downloading. When a limit blocks work the answer is to wait.
   clearest automation signature a client can emit. `sleep_interval_requests`
   is also passed to yt-dlp so one episode's metadata and caption fetches are
   not fired back to back.
-- After `RATE_LIMIT_STOP` (2) **consecutive** rate-limited episodes the whole
-  run gives up and sets `stopped: "rate_limited"` in its result. Before this
-  existed the loop retried each episode's full `[60, 180, 600]` backoff and
-  then moved to the next one, grinding against a limit that was not going to
-  lift — which is how a soft throttle becomes a hard one. Only a *successful*
-  fetch clears the count: an ordinary failure (no captions on a video) is not
-  evidence that the limit has lifted.
+- **One rate limit ends the run, and is never knocked on twice.** RFC 6585:
+  a 429 says *this client* has sent too many requests — the server is healthy
+  and rationing you specifically, so retrying is the behaviour limiters
+  escalate against. That is the opposite of a 503, where the server is unwell
+  and does want you back. Retries are therefore chosen by **whose problem the
+  failure is**:
 
-**Check `stopped` before believing a run finished.** `null` means the list was
-worked through; `"rate_limited"` means it stopped early and there is more to
-do. Ingest is resumable and skips what it already has, so picking it up a day
-later costs only the remainder. Roughly 300 caption fetches a day has been the
-observed ceiling.
+  | policy | what | response |
+  |---|---|---|
+  | `client` | 429, and a 403 that reads as a soft block | **stop.** No retry, run over |
+  | `server` | 502/503/504 | backoff `[30, 120]`, retry |
+  | `transport` | read timeouts, connection resets | retry `[2, 10]` — carries no signal |
+  | `other` | anything unrecognised | no retry; an unknown error is not evidence that asking again is safe |
+
+- **A rate limit starts a cooldown that outlives the run.** Stopping a run is
+  not the same as not going back: every `qs ingest` used to start with
+  amnesia, so nothing prevented a fresh one two minutes after a hard 429.
+  A `youtube-cooldown.json` at the data root records until when, and
+  `ingest` and `guest add` refuse before making any request. Default 6h
+  (`QS_RATE_LIMIT_COOLDOWN_H`); a `Retry-After` the server names wins over it.
+  `QS_IGNORE_COOLDOWN=1` overrides, and is deliberately awkward — overriding
+  it is asking to be limited harder. `qs status` shows whether one is active,
+  which is the only way to know without grepping a log.
+
+**Check `rate_limited`, not `stopped`, before believing a run was clean.**
+They answer different questions: `stopped` says the run ended early,
+`rate_limited` says a limit was seen at all. `stopped: null` was read as
+evidence no limiting occurred and never meant that — under the old breaker it
+only meant "no two consecutive". Ingest is resumable and skips what it already
+has, so picking it up later costs only the remainder.
+
+**Density, not volume, is what trips it.** A hard 429 arrived at roughly 120
+requests inside 25 minutes, well under the ~300/day that had been the working
+figure. Jitter fixed the *cadence* signature and does nothing about rate.
 
 **Things that will waste your time if you don't know them**
 - A `503` from search means the corpus server is stopped, not broken.

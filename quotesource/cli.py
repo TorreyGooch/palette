@@ -392,6 +392,10 @@ def cmd_status(args):
         return
     print(f"data root: {data['data_root']}")
     print(f"python: {data['python']}")
+    cool = data.get("cooldown") or {}
+    if cool.get("active"):
+        print(f"COOLDOWN: no YouTube requests until {cool['until']} "
+              f"({round((cool.get('remaining_s') or 0) / 60)} min left)")
     print(f"disk: {data['disk']['total_mb']} MB")
     idx = data.get("index") or {}
     if idx.get("exists"):

@@ -15,6 +15,22 @@ def _dir_size(path: Path) -> int:
     return total
 
 
+def _cooldown_block() -> dict:
+    """Whether we are currently standing off YouTube, and until when.
+
+    Discovering this used to mean grepping a log in /tmp. It is the one piece
+    of state that decides whether any ingest can run at all.
+    """
+    from .ingest import cooldown_state
+
+    state = cooldown_state()
+    if not state:
+        return {"active": False}
+    return {"active": True, "until": state.get("until"),
+            "since": state.get("at"), "remaining_s": state.get("remaining_s"),
+            "source": state.get("source"), "reason": state.get("reason")}
+
+
 def corpus_status() -> dict:
     root = ensure_root()
     episodes_root = root / "episodes"
@@ -69,6 +85,7 @@ def corpus_status() -> dict:
         "totals": totals,
         "index": index_stats(),
         "embeddings": embed,
+        "cooldown": _cooldown_block(),
         "disk": {
             "episodes_mb": round(_dir_size(root / "episodes") / 1048576, 1),
             "total_mb": round(_dir_size(root) / 1048576, 1),

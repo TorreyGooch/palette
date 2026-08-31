@@ -20,7 +20,7 @@ import random
 import re
 import shutil
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import registry
@@ -29,13 +29,27 @@ from .transcripts import normalize_captions
 
 SLEEP_BETWEEN_EPISODES = 2.0
 SLEEP_JITTER = 0.6                 # +/- fraction of the pause, so it is not a metronome
-BACKOFF_SCHEDULE = [60, 180, 600]  # seconds, on rate-limit errors
+# Retry schedules, split by who the failure is about. A 503 and a 429 are
+# opposites and used to share one schedule.
+BACKOFF_SCHEDULE = [30, 120]       # 5xx: the server is unwell and wants us back
+TRANSPORT_BACKOFF = [2, 10]        # timeouts, resets: no signal, just noise
 
 # Consecutive rate-limited episodes before the whole run stops. The per-episode
 # backoff above survives a blip; this is what stops the loop from walking the
 # rest of the channel retrying every episode against a limit that is not going
 # to lift for a while.
-RATE_LIMIT_STOP = 2
+# **A rate limit ends the run.** RFC 6585: a 429 says *this client* has sent
+# too many requests. The server is healthy and rationing us specifically, so
+# retrying is not merely useless - it is the behaviour limiters escalate
+# against. That is the opposite of a 503, where the server is unwell and does
+# want us back, and the two shared one policy until a hard 429 walked past a
+# breaker set to 2.
+#
+# It was worse than "2 was too many". The count reset on any success, so an
+# alternating limited/served pattern - the ordinary shape of a soft limit -
+# could never trip it at all. The breaker was weakest exactly where it was
+# most needed.
+RATE_LIMIT_STOP = 1
 
 # Caption statuses:
 #   captions            - transcript.json from YouTube captions
@@ -140,6 +154,146 @@ def _is_rate_limit(exc: Exception) -> bool:
     return "429" in s or "rate" in s or "too many requests" in s
 
 
+_SERVER_SIDE = ("500", "502", "503", "504", "bad gateway",
+                "service unavailable", "gateway time-out", "internal error")
+_TRANSPORT = ("timed out", "timeout", "connection reset", "connection aborted",
+              "temporary failure in name resolution", "connection refused",
+              "remote end closed")
+
+
+COOLDOWN_FILE = "youtube-cooldown.json"
+
+
+def _cooldown_hours() -> float:
+    return float(os.environ.get("QS_RATE_LIMIT_COOLDOWN_H", "6"))
+
+
+def cooldown_path() -> Path:
+    return ensure_root() / COOLDOWN_FILE
+
+
+def cooldown_state() -> dict | None:
+    """The active cooldown, or None. Expired ones read as None.
+
+    Never deleted on read: a read path does not write, and knowing when the
+    last limit happened is worth more than a tidy directory.
+    """
+    path = cooldown_path()
+    if not path.exists():
+        return None
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    until = state.get("until")
+    if not until:
+        return None
+    try:
+        remaining = datetime.fromisoformat(until) - datetime.now()
+    except ValueError:
+        return None
+    if remaining.total_seconds() <= 0:
+        return None
+    return {**state, "remaining_s": round(remaining.total_seconds())}
+
+
+def begin_cooldown(error: Exception, source_id: str = None) -> dict:
+    """Record that YouTube refused us, and until when we will not ask again.
+
+    Written to disk rather than kept in memory because every `qs ingest`
+    otherwise starts with amnesia - nothing stopped a fresh run two minutes
+    after a hard 429, and three sessions share this project without being able
+    to see each other's requests. A file is the only thing all three can see.
+
+    A Retry-After the server named wins over any figure we choose, because it
+    is the server saying exactly what it wants.
+    """
+    named = retry_after_seconds(error)
+    seconds = named if named else _cooldown_hours() * 3600
+    state = {
+        "at": datetime.now().isoformat(timespec="seconds"),
+        "until": (datetime.now() + timedelta(seconds=seconds)).isoformat(
+            timespec="seconds"),
+        "seconds": round(seconds),
+        "source": source_id,
+        "reason": str(error)[:300],
+        "from_retry_after": bool(named),
+    }
+    path = cooldown_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    return state
+
+
+class InCooldown(RuntimeError):
+    """YouTube asked us to stop recently enough that we still are."""
+
+
+def check_cooldown():
+    """Refuse before making a request. Called at the entry of anything that does.
+
+    This is what turns "the run stopped" into "we do not go back yet". Set
+    QS_IGNORE_COOLDOWN=1 to override, which is deliberately awkward: overriding
+    it is asking to be limited harder.
+    """
+    if os.environ.get("QS_IGNORE_COOLDOWN") == "1":
+        return None
+    state = cooldown_state()
+    if not state:
+        return None
+    minutes = state["remaining_s"] / 60.0
+    raise InCooldown(
+        f"YouTube rate-limited us at {state['at']} and we are not asking again "
+        f"until {state['until']} ({minutes:.0f} min left). Ingest is resumable, "
+        f"so waiting costs only time. Reason: {state.get('reason', '')[:120]}")
+
+
+def failure_policy(exc: Exception) -> str:
+    """Who the failure is about, which is what decides whether to knock again.
+
+      client     the server is healthy and rationing *us* (429, and a 403 that
+                 reads as a soft block). Stop. Retrying is self-incriminating.
+      server     the server is unwell and wants us back (5xx). Backoff, retry.
+      transport  a read timed out, a socket died. Carries no signal about
+                 anyone. Retry a couple of times.
+      other      unknown. Do not retry; an unrecognised error is not evidence
+                 that trying again is safe.
+
+    Classifying by *whose* problem it is, rather than by whether something
+    errored, is the distinction the old single schedule was missing.
+    """
+    text = str(exc).lower()
+    if _is_rate_limit(exc):
+        return "client"
+    if "403" in text or "forbidden" in text:
+        return "client"
+    if any(marker in text for marker in _SERVER_SIDE):
+        return "server"
+    if any(marker in text for marker in _TRANSPORT):
+        return "transport"
+    return "other"
+
+
+_RETRY_AFTER = re.compile(r"retry[- ]after[:=]?\s*(\d+)", re.I)
+
+
+def retry_after_seconds(exc: Exception) -> float | None:
+    """A Retry-After the server named, if the error carried one.
+
+    Authoritative when present - it beats any schedule we invent. Best effort:
+    yt-dlp surfaces most failures as text, so this reads the message rather
+    than a header object, and returns None whenever it cannot be sure.
+    """
+    match = _RETRY_AFTER.search(str(exc))
+    if not match:
+        return None
+    try:
+        seconds = float(match.group(1))
+    except ValueError:
+        return None
+    return seconds if 0 < seconds <= 7 * 24 * 3600 else None
+
+
 # ── YouTube ───────────────────────────────────────────────────────────────────
 
 _YT_URL_ID = re.compile(
@@ -170,6 +324,7 @@ def add_episode(url: str, source: dict, quiet: bool = False) -> dict:
     the same politeness.
     """
     ensure_root()
+    check_cooldown()
     episode_id = youtube_id(url)
     if not episode_id:
         raise ValueError(f"not a YouTube video URL: {url!r}")
@@ -185,14 +340,14 @@ def add_episode(url: str, source: dict, quiet: bool = False) -> dict:
     entry = {"episode_id": episode_id,
              "url": f"https://www.youtube.com/watch?v={episode_id}",
              "title": "", "duration": None}
-    meta, hit_limit = _fetch_with_backoff(source, entry, quiet)
+    meta = _fetch_with_backoff(source, entry, quiet)
     row = {"source": source["id"], "episode_id": episode_id,
            "title": meta.get("title"),
            "show": meta.get("uploader"),
            "upload_date": meta.get("upload_date"),
            "duration": meta.get("duration"),
            "status": meta.get("status"),
-           "already_had_it": False, "rate_limited": hit_limit}
+           "already_had_it": False, "rate_limited": False}
     # Reported at add time, while fixing it is still one `guest remove` away
     # rather than a re-transcription later.
     twin = find_duplicate(source, episode_id, meta.get("title"),
@@ -565,10 +720,17 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
         # gave up early. A caller that cannot tell the difference will treat a
         # throttled run as a complete one.
         "stopped": None,
+        # Whether a rate limit was seen *at all*. `stopped` used to be read as
+        # evidence that none had occurred, and it never meant that - it only
+        # ever meant "no two consecutive". They are now separate answers, and
+        # this is the one to check before believing a run was clean.
+        "rate_limited": False,
     }
 
+    check_cooldown()
+
     processed = 0
-    consecutive_limited = 0
+    rate_limited_at = None
     for entry in entries:
         if limit is not None and processed >= limit:
             break
@@ -583,25 +745,27 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
             if stype == "rss":
                 _fetch_rss_episode(source, entry, quiet)
             else:
-                _, hit_limit = _fetch_with_backoff(source, entry, quiet)
-                # An episode that only got through after a 429 still counts:
-                # by then the endpoint has already asked us to slow down.
-                consecutive_limited = consecutive_limited + 1 if hit_limit else 0
+                _fetch_with_backoff(source, entry, quiet)
             result["retried" if is_retry else "new"] += 1
             result["episodes"].append(entry["episode_id"])
         except RateLimited as e:
-            consecutive_limited += 1
+            rate_limited_at = e
             result["failed"] += 1
             result.setdefault("failures", []).append(
                 {"episode_id": entry["episode_id"], "error": str(e),
                  "kind": failure_kind(e, rate_limited=True)})
             print(f"  {entry['episode_id']}  FAILED: {e}", flush=True)
         except Exception as e:
-            # An ordinary failure - no captions on this video, say - is not
-            # evidence of a rate limit, but it is not evidence that one has
-            # lifted either. Leave the count alone: only a fetch that actually
-            # succeeds proves we are being served again. Resetting here would
-            # let an alternating 429 / no-captions channel run forever.
+            # An ordinary failure - no captions on this video, say - is not a
+            # rate limit and must not stop the run.
+            #
+            # But a client-attributed one arriving by some route other than
+            # _fetch_with_backoff still has to. Belt and braces: the rule is
+            # "a 429 ends the run", not "a 429 raised as the right exception
+            # class ends the run", and the second is the kind of rule that
+            # holds until someone adds a code path.
+            if failure_policy(e) == "client":
+                rate_limited_at = e
             result["failed"] += 1
             result.setdefault("failures", []).append(
                 {"episode_id": entry["episode_id"], "error": str(e),
@@ -610,10 +774,16 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
             print(f"  {entry['episode_id']}  FAILED: {e}", flush=True)
         processed += 1
 
-        if consecutive_limited >= RATE_LIMIT_STOP:
+        if rate_limited_at is not None:
+            # One is enough. The endpoint has said we are asking too often,
+            # and the next request is the one that gets the limit extended.
             result["stopped"] = "rate_limited"
-            print(f"  stopping: {consecutive_limited} consecutive rate-limited "
-                  f"episodes. Ingest is resumable - try again later.", flush=True)
+            result["rate_limited"] = True
+            cooling = begin_cooldown(rate_limited_at, source.get("id"))
+            result["cooldown"] = cooling
+            print(f"  stopping: rate limited. Not asking YouTube again until "
+                  f"{cooling['until']}. Ingest is resumable, so waiting costs "
+                  f"only time.", flush=True)
             break
 
         if stype != "rss":
@@ -623,27 +793,37 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
 
 
 def _fetch_with_backoff(source: dict, entry: dict, quiet: bool):
-    """Fetch one episode, retrying a rate limit. Returns (metadata, hit_limit).
+    """Fetch one episode, retrying only what is worth retrying.
 
-    `hit_limit` says whether any attempt was refused for rate limiting, even
-    if a later one succeeded - the caller needs that to decide whether the run
-    as a whole should stop. Raises RateLimited when every attempt was refused,
-    which is distinct from an ordinary failure and is counted differently.
+    The schedule is chosen by *whose* problem the failure is, because a 429
+    and a 503 want opposite responses. A client-attributed refusal is never
+    retried at all: it raises RateLimited on the first one, and the caller
+    ends the run.
+
+    Returns the metadata. It used to return `(metadata, hit_limit)`, where
+    hit_limit said a rate limit had been survived - there is no such thing
+    now, and a field that is always False is a field that will mislead
+    someone.
     """
-    last = None
-    hit_limit = False
-    for backoff in [0] + BACKOFF_SCHEDULE:
-        if backoff:
-            _log(quiet, f"rate limited; sleeping {backoff}s")
-            time.sleep(backoff)
+    remaining = None            # schedule, fixed by the first retryable error
+    while True:
         try:
-            return _fetch_youtube_episode(source, entry, quiet), hit_limit
+            return _fetch_youtube_episode(source, entry, quiet)
         except Exception as e:
-            last = e
-            if not _is_rate_limit(e):
+            policy = failure_policy(e)
+            if policy == "client":
+                raise RateLimited(str(e)) from None
+            schedule = {"server": BACKOFF_SCHEDULE,
+                        "transport": TRANSPORT_BACKOFF}.get(policy)
+            if schedule is None:
+                raise               # unknown: not evidence that retrying is safe
+            if remaining is None:
+                remaining = list(schedule)
+            if not remaining:
                 raise
-            hit_limit = True
-    raise RateLimited(str(last))
+            wait = remaining.pop(0)
+            _log(quiet, f"{policy} failure; retrying in {wait}s")
+            time.sleep(wait)
 
 
 def list_episodes(source_id: str) -> list[dict]:
