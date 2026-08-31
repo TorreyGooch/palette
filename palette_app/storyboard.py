@@ -280,11 +280,23 @@ def render_storyboard(
     wrapped = [wrap_text(p.get("note") or "", tw,
                          lambda s: width_of(s, note_font)) for p in panels]
 
+    # The prompt is drawn in the caption, beside the note, rather than inside
+    # the panel box. It has to appear whatever else the beat has: a prompt is
+    # an instruction *about* the beat, not a substitute for its picture, and a
+    # beat most often carries a prompt precisely because it already has a
+    # quote to illustrate. Drawing it only when nothing else filled the box
+    # made it invisible on every beat that mattered, and the PNG is the
+    # artifact a board is handed over as - so a stripped prompt is a silently
+    # lost payload, not a cosmetic gap.
+    prompts = [wrap_text(("> " + (p.get("prompt") or "").strip()) if
+                         (p.get("prompt") or "").strip() else "", tw,
+                         lambda s: width_of(s, note_font)) for p in panels]
+
     rows = [list(range(i, min(i + ncols, len(panels))))
             for i in range(0, len(panels), ncols)]
     row_heights = []
     for row in rows:
-        lines = max((len(wrapped[i]) for i in row), default=0)
+        lines = max((len(wrapped[i]) + len(prompts[i]) for i in row), default=0)
         row_heights.append(th + gap + meta_h + (lines * note_h) + gap)
 
     head_h = (line_height(title_font) + padding) if title else 0
@@ -335,23 +347,19 @@ def render_storyboard(
                               font=note_font)
                     qy += note_h
                 drawn = True
-            # A beat that is only a prompt has nothing shot yet - that is
-            # the point of it - so it draws what was asked for, marked as an
-            # instruction rather than set as a quote would be.
-            if not drawn and prompt:
-                lines = wrap_text("[ " + prompt + " ]", tw - 3 * gap,
-                                  lambda s: width_of(s, note_font))
-                shown = lines[:max(1, int((th - gap) // note_h))]
-                py_ = y + max(gap, (th - len(shown) * note_h) // 2)
-                for line in shown:
-                    draw.text((x + 2 * gap, py_), line, fill=PROMPT_FG,
-                              font=note_font)
-                    py_ += note_h
-                drawn = True
             if not drawn:
-                if not image_path:
+                # Nothing to show at all is worth reporting. A beat that is
+                # only a prompt has something to show and asked for no image,
+                # so it is not missing anything - the same distinction the
+                # page draws, and the reason missing[] is trustworthy.
+                if not image_path and not prompt:
                     missing.append(idx + 1)
-                label = "image unavailable" if image_path else "empty beat"
+                # Three states, not two: a lost file is a fault, a beat with
+                # nothing shot yet is doing its job, and an empty beat is
+                # neither. The prompt itself is drawn below with the note.
+                label = ("image unavailable" if image_path
+                         else "prompt only - nothing shot yet" if prompt
+                         else "empty beat")
                 draw.text((x + (tw - width_of(label, meta_font)) / 2,
                            y + th / 2 - meta_h / 2),
                           label, fill=MISSING_FG, font=meta_font)
@@ -363,6 +371,9 @@ def render_storyboard(
             ty += meta_h
             for line in wrapped[idx]:
                 draw.text((x, ty), line, fill=NOTE_FG, font=note_font)
+                ty += note_h
+            for line in prompts[idx]:
+                draw.text((x, ty), line, fill=PROMPT_FG, font=note_font)
                 ty += note_h
         y += row_heights[r] + padding
 

@@ -168,3 +168,79 @@ def test_a_lost_image_is_still_reported_when_a_prompt_carries_the_beat(
     result = api.storyboard_render(board["id"], body={})
 
     assert result["missing"] == [1]
+
+
+# -- the PNG is the handoff, so the prompt has to survive it ------------------
+
+def render_bytes(api, library, board_id, **body):
+    result = api.storyboard_render(board_id, body=body)
+    return (library / "exports" / result["filename"]).read_bytes()
+
+
+def test_a_prompt_changes_the_render_on_a_beat_that_already_has_a_picture(
+        api, library):
+    """The case that was missed: `drawn` was already true, so it was skipped.
+
+    Tested only on prompt-only beats, the old code passed while every beat a
+    person would actually annotate silently dropped its prompt — and the PNG
+    is what a board is handed over as, so the payload the field exists to
+    deliver went missing on the way out.
+    """
+    image_item(library, "a.png", "img-a")
+    board = api.storyboard_create(body={"name": "B"})
+
+    api.storyboard_update(board["id"], body={
+        "panels": [{"item_id": "img-a", "note": "the turn"}]})
+    without = render_bytes(api, library, board["id"], cols=1, title="")
+
+    api.storyboard_update(board["id"], body={
+        "panels": [{"item_id": "img-a", "note": "the turn",
+                    "video_prompt": "slow push in, 35mm, tank light"}]})
+    with_prompt = render_bytes(api, library, board["id"], cols=1, title="")
+
+    assert with_prompt != without, "the prompt never reached the canvas"
+
+
+def test_a_prompt_changes_the_render_on_a_beat_that_speaks(api, library):
+    """A beat carrying a quote is the likeliest place to write a prompt."""
+    from tests.test_narration import audio_item
+
+    audio_item(library, "clip.m4a", "aud-1")
+    board = api.storyboard_create(body={"name": "B"})
+    beat = {"narration": {"item_id": "aud-1"}, "note": "cold open"}
+
+    api.storyboard_update(board["id"], body={"panels": [beat]})
+    without = render_bytes(api, library, board["id"], cols=1, title="")
+
+    api.storyboard_update(board["id"], body={
+        "panels": [{**beat, "video_prompt": "a defeated lobster, macro"}]})
+    with_prompt = render_bytes(api, library, board["id"], cols=1, title="")
+
+    assert with_prompt != without
+
+
+def test_editing_a_prompt_changes_the_render(api, library):
+    """Not merely 'a prompt exists' — the text itself has to be on the canvas."""
+    image_item(library, "a.png", "img-a")
+    board = api.storyboard_create(body={"name": "B"})
+
+    api.storyboard_update(board["id"], body={"panels": [
+        {"item_id": "img-a", "video_prompt": "wide shot"}]})
+    first = render_bytes(api, library, board["id"], cols=1, title="")
+
+    api.storyboard_update(board["id"], body={"panels": [
+        {"item_id": "img-a", "video_prompt": "extreme close up on the claw"}]})
+    second = render_bytes(api, library, board["id"], cols=1, title="")
+
+    assert first != second
+
+
+def test_a_prompt_only_beat_is_labelled_rather_than_called_empty(api, library):
+    """"empty beat" would be wrong: nothing is shot yet, which is the point."""
+    board = api.storyboard_create(body={"name": "B"})
+    api.storyboard_update(board["id"], body={
+        "panels": [{"video_prompt": "a two-headed worm, macro"}]})
+
+    result = api.storyboard_render(board["id"], body={})
+    assert result["missing"] == []
+    assert result["size_bytes"] > 0

@@ -859,6 +859,41 @@ def qs_search(q: str, mode: str = "semantic", source: Optional[str] = None,
         raise HTTPException(500, str(e))
 
 
+# A refused download and an unfetched one look alike and need opposite
+# answers, so the markers are named rather than guessed at each call site.
+_SOURCE_REFUSED = ("403", "forbidden", "video unavailable", "private video",
+                   "sign in to confirm", "removed by the uploader",
+                   "not available in your country")
+
+
+def _words_failure_detail(error: Exception) -> str:
+    """Why word timings failed, and what the reader should do about it.
+
+    Two failures produce the same symptom and want opposite responses. If the
+    audio simply has not been fetched, a pull stores it and every later call
+    on that episode is free. If the source refused the download, a pull fails
+    exactly the same way and the answer is to wait.
+
+    Telling a reader to "just pull it" in the second case sends them into a
+    403 - and the step after a 403 is where someone reaches for cookies or a
+    browser user agent, which trades a decaying per-IP annoyance for an
+    identity permanently attached to bulk downloading. So the message says
+    not to, at the moment it would be tempting.
+    """
+    text = str(error) or error.__class__.__name__
+    lowered = text.lower()
+    if any(marker in lowered for marker in _SOURCE_REFUSED):
+        return (f"{text}. Word timings need this episode's audio, and the "
+                f"source refused to serve it - a `qs pull` will fail the same "
+                f"way, so this is a wait, not a retry. Never add cookies or a "
+                f"browser user agent to get past it. `context` still works on "
+                f"this episode: it reads the transcript already on disk.")
+    return (f"{text}. Word timings need this episode's audio and it is not "
+            f"stored yet; captions alone are not enough. A `qs pull` on this "
+            f"episode fetches and keeps it (~50 MB), after which words and "
+            f"cuts on it cost no network at all.")
+
+
 @app.get("/api/qs/words")
 def qs_words(episode_id: str, start: float, end: float, pad: float = 0.0,
              model: Optional[str] = None):
@@ -882,18 +917,17 @@ def qs_words(episode_id: str, start: float, end: float, pad: float = 0.0,
         return word_map(episode_id, start, end, pad=pad, model_size=model)
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
-    except RuntimeError as e:
+    except HTTPException:
+        raise
+    except Exception as e:
         # Word timings are whisper over a window of the *audio*, so an episode
         # holding only captions has nothing to run on and falls through to an
-        # on-demand fetch. When that fetch fails this used to escape as a bare
-        # 500, which reads as "the endpoint is broken" - and sent a session
-        # looking at the model and the server while `context` on the same
-        # episode answered perfectly well from the transcript on disk.
-        raise HTTPException(
-            502, f"{e}. Word timings need this episode's audio and it is not "
-                 f"stored yet; captions alone are not enough. A `qs pull` on "
-                 f"this episode fetches and keeps it (~50 MB), after which "
-                 f"words and cuts on it cost no network at all.") from None
+        # on-demand fetch. Catching RuntimeError alone was not enough: the
+        # fetch is yt-dlp, and a refused download raises DownloadError, which
+        # sailed straight past and reached the browser as a bare 500 reading
+        # "the endpoint is broken" - while `context` on the same episode
+        # answered perfectly well from the transcript on disk.
+        raise HTTPException(502, _words_failure_detail(e)) from None
 
 
 @app.get("/api/qs/context")

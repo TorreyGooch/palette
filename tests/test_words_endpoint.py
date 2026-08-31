@@ -83,42 +83,90 @@ def test_remote_failure_keeps_its_status(monkeypatch):
     assert e.value.status_code == 404
 
 
-def test_missing_episode_audio_explains_itself(monkeypatch):
-    """Captions alone cannot give word timings, and the 500 never said so.
-
-    `context` on the same episode answers fine from the transcript on disk, so
-    a bare CUDA-shaped error sent a session looking at the model and the
-    server when the actual gap was one absent audio file.
-    """
+def _local(monkeypatch):
     from palette_app import main
 
     monkeypatch.delenv("QS_REMOTE", raising=False)
     monkeypatch.setattr(main, "_remote", lambda: None)
+    return main
 
-    def no_audio(*a, **k):
-        raise RuntimeError("could not obtain audio for mO9LUWs5M60")
 
-    monkeypatch.setattr("quotesource.cut.word_map", no_audio)
+def _raising(monkeypatch, exc):
+    main = _local(monkeypatch)
+
+    def boom(*a, **k):
+        raise exc
+
+    monkeypatch.setattr("quotesource.cut.word_map", boom)
+    return main
+
+
+def test_unfetched_audio_says_a_pull_will_fix_it(monkeypatch):
+    """Captions alone cannot give word timings, and the 500 never said so."""
+    main = _raising(monkeypatch,
+                    RuntimeError("could not obtain audio for mO9LUWs5M60"))
 
     with pytest.raises(HTTPException) as raised:
         main.qs_words("mO9LUWs5M60", 1988.0, 2016.0)
 
     assert raised.value.status_code == 502
     assert "could not obtain audio" in raised.value.detail
-    assert "qs pull" in raised.value.detail, "it must say what to do"
+    assert "qs pull" in raised.value.detail
+
+
+class DownloadError(Exception):
+    """Stands in for yt_dlp.utils.DownloadError, which is what actually flew."""
+
+
+def test_a_refused_download_is_not_a_retry(monkeypatch):
+    """The bug: catching RuntimeError missed the exception actually raised.
+
+    The fetch is yt-dlp, so a 403 arrives as DownloadError and sailed past,
+    reaching the browser as a bare 500. Worse, the message it replaced told
+    the reader to pull - which walks them straight into the same 403.
+    """
+    main = _raising(monkeypatch, DownloadError(
+        "ERROR: unable to download video data: HTTP Error 403: Forbidden"))
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("mO9LUWs5M60", 1992.0, 2013.0)
+
+    detail = raised.value.detail
+    assert raised.value.status_code == 502
+    assert "403" in detail, "the actual cause must survive"
+    assert "wait, not a retry" in detail
+    # It may mention a pull - to say it fails the same way. What it must not
+    # do is recommend one, which is what the old message did.
+    assert "will fail the same way" in detail
+    assert "fetches and keeps it" not in detail
+
+
+def test_a_refusal_warns_against_the_obvious_next_move(monkeypatch):
+    """A 403 is exactly where someone reaches for cookies. Say not to, there."""
+    main = _raising(monkeypatch, DownloadError("HTTP Error 403: Forbidden"))
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("EP", 0.0, 1.0)
+
+    assert "cookies" in raised.value.detail
+    assert "user agent" in raised.value.detail
+
+
+@pytest.mark.parametrize("message", [
+    "Video unavailable", "Private video", "Sign in to confirm you're not a bot",
+    "This video has been removed by the uploader",
+])
+def test_other_refusals_read_the_same_way(monkeypatch, message):
+    main = _raising(monkeypatch, DownloadError(message))
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("EP", 0.0, 1.0)
+    assert "wait, not a retry" in raised.value.detail
 
 
 def test_a_genuinely_absent_episode_is_still_a_404(monkeypatch):
-    """Not in the corpus and no audio yet are different answers."""
-    from palette_app import main
-
-    monkeypatch.delenv("QS_REMOTE", raising=False)
-    monkeypatch.setattr(main, "_remote", lambda: None)
-
-    def missing(*a, **k):
-        raise FileNotFoundError("episode 'NOPE' not found")
-
-    monkeypatch.setattr("quotesource.cut.word_map", missing)
+    """Not in the corpus and not yet fetched are different answers."""
+    main = _raising(monkeypatch, FileNotFoundError("episode 'NOPE' not found"))
 
     with pytest.raises(HTTPException) as raised:
         main.qs_words("NOPE", 0.0, 1.0)
