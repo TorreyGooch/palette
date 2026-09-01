@@ -92,16 +92,34 @@ def download_audio(ep_dir: Path, quiet: bool = True) -> Path | None:
 
     import yt_dlp
 
+    # This had no rate limit, no request spacing, no budget and no cooldown
+    # check - the only YouTube path in the project with none of them, and it
+    # runs in batches. A whisper backfill was therefore free to download
+    # episode after episode at full speed during an active standoff.
+    from .ingest import await_slot, check_cooldown, is_youtube
+    from .pull import _rate_limit, _sleep_between
+
+    # Only YouTube is rationed. This function takes the RSS enclosure when the
+    # episode has one, and pacing a podcast CDN at YouTube's rate would slow a
+    # backfill to no purpose.
+    if is_youtube(url):
+        check_cooldown()
+        await_slot(quiet, "audio")
+
     opts = {
         "quiet": True, "no_warnings": True, "noprogress": True,
         "format": "bestaudio[ext=m4a]/bestaudio/best",
         "outtmpl": str(ep_dir / "audio.%(ext)s"),
+        "sleep_interval_requests": _sleep_between(),
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "m4a",
             "preferredquality": "64",
         }],
     }
+    rate = _rate_limit()
+    if rate:
+        opts["ratelimit"] = rate
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([url])
     if not audio_path.exists():

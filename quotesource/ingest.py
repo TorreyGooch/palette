@@ -236,19 +236,46 @@ def budget_state() -> dict:
     }
 
 
-def record_request(kind: str = "fetch"):
-    """Count one request against the budget, for every session to see.
+YOUTUBE_HOSTS = ("youtube.com", "youtu.be", "googlevideo.com", "ytimg.com")
+
+
+def is_youtube(url: str) -> bool:
+    """Whether a URL draws on the YouTube budget.
+
+    The budget exists for one host's rate limiting. A podcast CDN wants you to
+    have the file and has no limit worth the name, so charging an enclosure
+    download against the same allowance would pace RSS at YouTube's speed for
+    no reason - and the codebase already says RSS does not count.
+    """
+    from urllib.parse import urlparse
+
+    host = (urlparse(url or "").hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in YOUTUBE_HOSTS)
+
+
+def record_request(kind: str = "fetch", count: int = 1):
+    """Count requests against the budget, for every session to see.
 
     Held under a lock and rewritten atomically: two sessions ingesting would
     otherwise each read the same ledger and each write back their own, and an
     undercount is the dangerous direction to be wrong in.
+
+    `count` exists because one *episode* is not one *request*. Fetching an
+    episode is a metadata call plus a caption download, and used to be a
+    metadata call plus up to eight caption downloads - all recorded as one.
+    A budget of 30/hour was therefore permitting a few hundred requests an
+    hour, which is the undercount that made a limit arrive at what looked
+    like a safe rate.
     """
     from palette_app.library import library_lock
 
+    if count <= 0:
+        return
     root = ensure_root()
     with library_lock(root):
         ledger = _read_ledger()
-        ledger.append(datetime.now())
+        now = datetime.now()
+        ledger.extend(now for _ in range(count))
         # Full precision: the spacing is arithmetic on these, and rounding
         # to the second puts up to a second of error into every gap.
         payload = json.dumps([w.isoformat() for w in ledger])
@@ -257,7 +284,7 @@ def record_request(kind: str = "fetch"):
         os.replace(tmp, root / BUDGET_FILE)
 
 
-def await_slot(quiet: bool = False, kind: str = "fetch"):
+def await_slot(quiet: bool = False, kind: str = "fetch", spacing: bool = True):
     """Wait for the budget to allow one more request, or refuse for today.
 
     The hourly cap is spacing: at 30/hour a request is allowed about every two
@@ -269,6 +296,12 @@ def await_slot(quiet: bool = False, kind: str = "fetch"):
     exact interval are the clearest automation signature a client can emit,
     and a budget enforced to the second would reintroduce the metronome the
     jitter was added to remove.
+
+    `spacing=False` still checks the cooldown, still refuses once the day is
+    spent, and still counts the request - it only declines to *wait*. That is
+    for a single interactive download a person is sitting in front of, where
+    two minutes of silence is not politeness, it is a hang. Bulk paths keep
+    the spacing, because bulk is what draws a limit.
     """
     state = budget_state()
     if state["day_exhausted"]:
@@ -276,7 +309,7 @@ def await_slot(quiet: bool = False, kind: str = "fetch"):
             f"today's budget is spent ({state['day']}/{state['day_max']} "
             f"requests in 24h). Ingest is resumable, so tomorrow costs only "
             f"the remainder. QS_MAX_PER_DAY raises it.")
-    if state["wait_s"] > 0:
+    if state["wait_s"] > 0 and spacing:
         wait = _pause(state["wait_s"], SLEEP_JITTER / 4)
         _log(quiet, f"budget: {state['hour']}/{state['hour_max']} this hour; "
                     f"waiting {wait:.0f}s")
@@ -470,6 +503,7 @@ def add_episode(url: str, source: dict, quiet: bool = False) -> dict:
              "title": "", "duration": None}
     await_slot(quiet)
     meta = _fetch_with_backoff(source, entry, quiet)
+    record_request("fetch", (meta or {}).get("_requests", 1) - 1)
     row = {"source": source["id"], "episode_id": episode_id,
            "title": meta.get("title"),
            "show": meta.get("uploader"),
@@ -674,28 +708,87 @@ def _enumerate_youtube(url: str, source_type: str) -> list[dict]:
     return out
 
 
+# Preference order among English tracks. Exact "en" first because it is what
+# a creator uploading one track uses; the regional variants are what YouTube
+# offers when there is no plain one.
+CAPTION_LANGS = ("en", "en-orig", "en-US", "en-GB")
+
+
+def pick_caption_track(info: dict):
+    """The one English track worth asking for, as (lang, is_auto), or None.
+
+    Only one is ever used - the caller takes manual if any exists and auto
+    otherwise - and asking for eight to use one is the difference between a
+    polite client and a noisy one.
+
+    It matters more than the arithmetic suggests. `writeautomaticsub` with a
+    language the video does not natively carry asks YouTube to **auto-translate
+    on demand**, which is a heavier, server-side operation than handing over a
+    stored track. A video with no English captions at all used to draw eight
+    such requests and produce nothing; now it draws none.
+    """
+    manual = info.get("subtitles") or {}
+    auto = info.get("automatic_captions") or {}
+    for available, is_auto in ((manual, False), (auto, True)):
+        for lang in CAPTION_LANGS:
+            if lang in available:
+                return lang, is_auto
+        # A track we did not name, e.g. "en-GB-oxendict". Still English, and
+        # still one request, so it beats falling through to auto-translation.
+        for lang in sorted(available):
+            if lang.startswith("en"):
+                return lang, is_auto
+    return None
+
+
 def _fetch_youtube_episode(source: dict, entry: dict, quiet: bool) -> dict:
-    """Fetch full metadata + captions for one episode. Returns metadata dict."""
+    """Fetch full metadata + captions for one episode. Returns metadata dict.
+
+    Two phases, deliberately. Asking what exists costs one request and tells
+    us exactly which track to fetch; the old single call asked for four
+    languages in both manual and automatic form - up to eight caption requests
+    for the one track we use, and eight fruitless ones on a video with no
+    English captions at all.
+
+    Returns `_requests` alongside the metadata - not written to disk, since it
+    is accounting for the caller rather than a property of the episode - so the
+    budget can count what was actually sent rather than one per episode. It is
+    a lower bound:
+    yt-dlp makes its own internal calls we do not see, so the ledger
+    under-counts, and it under-counted by roughly eight times before this.
+    """
     import yt_dlp
 
     ep_dir = episode_dir(source["id"], entry["episode_id"])
     ep_dir.mkdir(parents=True, exist_ok=True)
 
-    opts = {
+    base = {
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
         "skip_download": True,
-        "writesubtitles": True,
-        "writeautomaticsub": True,
-        "subtitleslangs": ["en", "en-US", "en-GB", "en-orig"],
-        "subtitlesformat": "json3/vtt/best",
-        "outtmpl": str(ep_dir / "captions.raw"),
         "sleep_interval_requests": _request_gap(),
     }
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(entry["url"], download=True)
+    # Phase 1: what is there? No captions are downloaded by this call.
+    with yt_dlp.YoutubeDL(base) as ydl:
+        info = ydl.extract_info(entry["url"], download=False)
+    requests_made = 1
+
+    # Phase 2: fetch exactly the one track we will use, if there is one.
+    chosen = pick_caption_track(info)
+    if chosen:
+        lang, is_auto = chosen
+        with yt_dlp.YoutubeDL({
+            **base,
+            "writesubtitles": not is_auto,
+            "writeautomaticsub": is_auto,
+            "subtitleslangs": [lang],
+            "subtitlesformat": "json3/vtt/best",
+            "outtmpl": str(ep_dir / "captions.raw"),
+        }) as ydl:
+            ydl.extract_info(entry["url"], download=True)
+        requests_made += 2      # the re-extraction, and the track itself
 
     manual_subs = info.get("subtitles") or {}
     has_manual = any(k.startswith("en") for k in manual_subs)
@@ -734,7 +827,9 @@ def _fetch_youtube_episode(source: dict, entry: dict, quiet: bool) -> dict:
         _log(quiet, f"{entry['episode_id']}  no captions; queued for whisper")
 
     _write_metadata(ep_dir, meta)
-    return meta
+    # After the write, never before: this is accounting for the caller, not a
+    # property of the episode, and metadata.json is a stored shape.
+    return {**meta, "_requests": requests_made}
 
 
 # ── RSS ───────────────────────────────────────────────────────────────────────
@@ -912,7 +1007,10 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
                 _fetch_rss_episode(source, entry, quiet)
             else:
                 await_slot(quiet)
-                _fetch_with_backoff(source, entry, quiet)
+                fetched = _fetch_with_backoff(source, entry, quiet)
+                # await_slot already counted one. Charge the rest, so the
+                # ledger measures requests rather than episodes.
+                record_request("fetch", (fetched or {}).get("_requests", 1) - 1)
             result["retried" if is_retry else "new"] += 1
             result["episodes"].append(entry["episode_id"])
         except BudgetExhausted as e:

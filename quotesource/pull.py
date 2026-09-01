@@ -264,6 +264,18 @@ async def _get_full_media(episode_id: str, url: str, mode: str,
     if mode == "av":
         opts["merge_output_format"] = "mp4"
 
+    # A pull downloads a whole episode - ~50 MB, or ~2.5 GB for video - and
+    # used to spend nothing from the budget and never look at the cooldown.
+    # So a rate limit could stop every ingest for six hours while this path
+    # carried on fetching gigabytes from the same host. Interactive, so it
+    # does not wait for hourly spacing; it does obey a standoff and a spent
+    # day, which are the parts that mean anything.
+    from .ingest import await_slot, check_cooldown, is_youtube
+
+    if is_youtube(url):
+        check_cooldown()
+        await_slot(True, "pull", spacing=False)
+
     loop = asyncio.get_event_loop()
 
     def _dl():

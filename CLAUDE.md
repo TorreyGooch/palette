@@ -496,6 +496,28 @@ drew the limit. **A channel walk counts**: `qs ingest` re-enumerates the whole
 channel each run, and that listing spends from the same allowance as a caption
 fetch. RSS does not count — a podcast CDN wants you to have the file.
 
+**The ledger counts requests, not episodes — it did not used to.** One episode
+fetch was recorded as one request while it asked for four languages in both
+manual and automatic form: up to eight caption downloads plus a metadata call.
+A budget of 30/hour was therefore permitting a few hundred an hour, which is
+how a limit arrived at what looked like a comfortably safe rate. The fetch now
+asks what tracks exist (one request), then downloads the **one** track it will
+actually use — so an episode costs 3, and a video with no English captions
+costs 1 instead of drawing eight fruitless requests. That last case matters
+beyond the arithmetic: `writeautomaticsub` for a language a video does not
+natively carry is a request for an **on-demand auto-translation**, which is a
+heavier server-side operation than handing over a stored track.
+
+**`pull` and `qs transcribe` are rationed too, and were not.** A pull downloads
+a whole episode (~50 MB, ~2.5 GB for video) and `transcribe` downloads audio in
+batches; neither spent anything from the budget and neither checked the
+cooldown. So a 429 could stop every ingest for six hours while a whisper
+backfill carried on pulling gigabytes from the host that had just said stop.
+Both now check the cooldown and charge the budget. A pull does not wait for
+hourly spacing — it is interactive, and two minutes of silence in front of a
+person is a hang, not politeness — but it still refuses once the day is spent.
+Both are gated on the actual host, so an RSS enclosure is still free.
+
 Running out mid-run stops with `stopped: "budget"` and keeps what it managed;
 running out before any work refuses outright, since there is no partial run to
 report. Neither is a rate limit and neither starts a cooldown. `qs status`

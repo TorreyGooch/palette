@@ -124,6 +124,16 @@ Operating rules that still matter:
   permits thirty inside a minute and then an idle hour, which is the shape
   that drew the limit. A long ingest is therefore *supposed* to look slow.
   `qs status` shows what is left.
+- **The budget counts requests, not episodes.** It used to count episodes and
+  call them requests, while one episode fetch sent up to nine — so 30/hour was
+  permitting a few hundred. An episode now costs 3 (ask what tracks exist,
+  then fetch the one we use) and a video with no English captions costs 1
+  rather than eight fruitless auto-translate requests. If a run feels slower
+  than you remember, that is the meter finally being honest.
+- **`pull` and `transcribe` spend from it now, and obey the cooldown.**
+  Neither did. A whisper backfill could download episode after episode at full
+  speed during an active standoff, which made "we stay stopped" untrue. RSS
+  enclosures are still free — the gate is on the host.
 - **A channel walk spends from it.** `qs ingest` re-enumerates the whole
   channel every run, so a probe, a main run and a retry are three listings.
   Plan a large channel as few runs, not many.
