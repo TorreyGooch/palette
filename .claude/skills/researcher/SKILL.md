@@ -77,7 +77,17 @@ exposed. Keep it that way:
   attached to bulk downloading. If you find yourself reaching for this, stop
   and ask instead.
 - **Never change a user agent to look like a browser.** Same reasoning: that
-  is impersonation to evade a limit rather than a fix for one.
+  is impersonation to evade a limit rather than a fix for one. The one user
+  agent this project sends is `quotesource/1.0`, to podcast CDNs — honest
+  self-identification, which is the opposite of a spoof and stays.
+- **Never enable yt-dlp impersonation.** Recent versions emit *"the extractor
+  specified to use impersonation for this download, but no impersonate target
+  is available"* on caption fetches, and it may well be why some videos now
+  refuse us. `--impersonate` forges a browser's **TLS fingerprint** — the same
+  category as cookies and a spoofed user agent, and arguably further, since it
+  disguises the client at the transport layer where nothing about us is
+  supposed to be a claim at all. Losing a video is the acceptable cost. If you
+  find yourself reaching for it, stop and ask.
 - If a limit is blocking work, the answer is always **wait**, never disguise.
 
 Two things the code now does for you, which you should still understand:
@@ -139,6 +149,12 @@ whole each run, since one new episode can duplicate something indexed months
 ago. Check it before spending whisper on a backlog: 108 of 186 thoughtforms
 episodes duplicate `levin_yt`, which is ~9 GPU-hours of transcription that did
 not need doing.
+
+**It only sees indexed episodes.** An episode enters the index when it has a
+transcript, so an audio-only backlog is invisible to the matcher — the first
+run found 1 link where a hand analysis of metadata on disk had found 108,
+because 176 of thoughtforms' 186 episodes have audio and no transcript. That
+makes it a search-time tool, not a pre-transcription triage tool.
 
 **It ships dark.** The column is created by the migration; the links are not
 computed until `qs index` runs, and until then every `duplicate_of` is null —

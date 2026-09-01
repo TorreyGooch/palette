@@ -193,6 +193,15 @@ genuinely different material — one at 3247 s against 1339 s. An episode of
 unknown duration is never matched, because there is nothing to confirm the
 guess with.
 
+**It only sees what is indexed**, which is not the same as what is on disk.
+An episode enters the index when it has a transcript, so an audio-only episode
+awaiting whisper is invisible to the matcher. Measured on the first run: one
+link found where a hand analysis of *metadata on disk* had found 108, because
+176 of thoughtforms' 186 episodes have audio and no transcript. Both numbers
+are right about different populations. For the Storyboarder this never bites —
+anything a search can return is indexed by definition — but do not read the
+count as a survey of the corpus.
+
 **A null means "not computed" until the corpus has been linked at least once.**
 `qs status` reports `index.duplicates.linked_at`, and while that is null every
 `duplicate_of` on every hit is silence rather than a verdict — the column
@@ -423,9 +432,14 @@ flag**:
 Every YouTube request this project makes is unauthenticated — no cookies, no
 OAuth, no API key anywhere in the codebase. A rate limit therefore lands on an
 IP and decays; no account is exposed. **Never add authentication to get past a
-limit** (`--cookies-from-browser` and friends), and never fake a browser user
-agent: both convert a temporary IP annoyance into a real identity attached to
-bulk downloading. When a limit blocks work the answer is to wait.
+limit** (`--cookies-from-browser` and friends), never fake a browser user
+agent, and **never enable yt-dlp impersonation** (`--impersonate`, which forges
+a browser's TLS fingerprint and which recent yt-dlp versions now suggest in a
+warning on caption fetches). All three convert a temporary IP annoyance into a
+real identity attached to bulk downloading, and the third does it at the
+transport layer, where nothing about this client is supposed to be a claim.
+The only user agent sent anywhere is `quotesource/1.0`, to podcast CDNs, which
+is honest self-identification rather than a disguise. When a limit blocks work the answer is to wait.
 
 `qs ingest` throttles in two ways, and both matter:
 
