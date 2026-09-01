@@ -172,7 +172,13 @@ source `people` lists and episode title/description), `--after/--before
 YYYY-MM-DD`, `--limit N`.
 
 Hit shape: `{episode_id, source_id, start, end, text, score, episode_title,
-upload_date, url, url_ts}`. `qs search` JSON wraps hits with `coverage`
+upload_date, url, url_ts, caption_quality, audio}`. **`audio` says whether
+cutting this quote needs the network**: `stored` means the episode's audio is
+already on disk, so a cut costs nothing and cannot be refused; `not_stored`
+means the first cut fetches the whole episode (~50 MB, and it can fail — one
+episode answers 403 permanently). It is deliberately not `fetchable`: a fetch
+nobody has tried is unknown, and promising otherwise would be a promise this
+side cannot keep. `qs search` JSON wraps hits with `coverage`
 (fraction of chunks embedded — treat <1.0 as "results may be incomplete").
 
 Errors: `{"error": msg}` on stderr, exit 1 (2 for usage).
@@ -488,9 +494,18 @@ Step 2 has an endpoint too — use it, don't guess from caption timestamps:
 
 ```bash
 curl -s "$API/words?episode_id=PWasTAtR6Ns&start=477&end=490"
-#   {"words": [... {"word": "you", "start": 487.26, "gap_before": 0.2}],
-#    "pauses": [...]}
+#   {"words":  [... {"index": 41, "word": "you", "start": 487.26,
+#                    "end": 487.44, "gap_before": 0.2}],
+#    "pauses": [... {"after_index": 40, "after_word": "away.",
+#                    "next_index": 41, "next_word": "you",
+#                    "at": 487.06, "gap": 0.2}]}
 ```
+
+**A pause names the words beside it by index, not only by spelling.** Selection
+happens in seconds and everything durable stores positions, so a caller handed
+only `after_word` has to search the list by string to get back to a number —
+and a word that occurs twice in the window makes that ambiguous. `after_index`
+is the word to end a cut on; `next_index` is the word to start the next one on.
 
 Whisper runs on that window only, so it is seconds on the GPU rather than a
 transcription job. Pick an end that already sits just before a real pause.
@@ -577,6 +592,27 @@ downstream contract — it is what lets visual beats land on specific words.
 the audio file. `attribution.range` is the only field in episode time.
 Every word listed is fully present in the audio; partial words at the
 edges are dropped rather than reported with times that run past the end.
+
+**Ask the app for a clip's words rather than reading the file.**
+`GET /api/items/{item_id}/words` returns the manifest's words *indexed*, with
+the pauses between them already computed:
+
+```bash
+curl -s "http://127.0.0.1:7861/api/items/<item_id>/words?min_gap=0.15"
+#   {"word_count": 42, "precision": "word_accurate",
+#    "words":  [{"index": 0, "word": "the", "start": 0.02, "end": 0.1,
+#                "gap_before": null}, ...],
+#    "pauses": [{"after_index": 5, "after_word": "hierarchies.",
+#                "next_index": 6, "next_word": "And", "gap": 0.7}, ...]}
+```
+
+`pauses` is usually the only field you need — it is the "where can this be
+split" answer, and the indices in it go straight into a beat's `word_start` /
+`word_end`. This reads the sidecar and nothing else: no audio, no whisper, no
+GPU, no network, so it still answers for an episode whose media YouTube
+refuses. A clip with no manifest (`qs pull` writes none) comes back
+`precision: "clip"` and says so rather than returning an empty list that reads
+as "no speech".
 
 **The manifest is what lets you narrow a quote without re-cutting it.**
 Splitting an existing clip by word range reads that JSON file and nothing

@@ -34,7 +34,16 @@ curl -s "$API/words?episode_id=<ep>&start=..&end=.."
 curl -s -X POST "$API/cut" -H 'Content-Type: application/json' -d '{...}'
 ```
 
-A 503 means the corpus server is off, not broken. Start it.
+**What the failures actually mean.** A `503` means the corpus server is off —
+start it. But that is the one you are least likely to see. Through the bridge
+you will meet `502` far more often, and it carries the real reason in its
+message: the episode has no stored audio, or the download was refused (403,
+permanently for at least one episode), or CUDA is out of memory. Read the
+message rather than assuming the server is down.
+
+**The GPU is shared, and search competes with `words`.** The embedding model
+holds ~3.3 GB for about ten minutes after the last search, so two searches
+followed by a `words` call can OOM. Space them, or stop the server between.
 
 ## What you may write
 
@@ -53,13 +62,42 @@ A 503 means the corpus server is off, not broken. Start it.
 - Application code, tests, docs. That is the Architect's.
 - Generation.
 
-## The three steps, and step 2 is the one that gets skipped
+## First decide which path you are on
+
+**Narrowing a clip you already cut is not the same job as cutting a new one,
+and it is much cheaper.** Splitting reads the clip's word manifest and nothing
+else — no audio, no whisper, no GPU, no network — while `words` and `cut`
+operate on the *episode* and therefore need its media.
+
+| you want to | you need | costs |
+|---|---|---|
+| split or tighten a clip you already cut | `GET /api/items/{id}/words` | nothing |
+| cut new boundaries out of the episode | the three steps below | GPU, maybe a fetch |
+
+Every `qs cut` clip has a manifest, so the first row is the common case. It
+matters most when the second is impossible: an episode whose audio YouTube
+refuses (403) can still have its existing clips subdivided freely.
+
+`/api/items/{id}/words` returns `pauses` with `after_index` / `next_index`
+already computed — those go straight into a beat's `word_start` / `word_end`.
+Do not recompute gaps by hand and do not read the `.words.json` off disk.
+
+## The three steps, for a NEW cut — and step 2 is the one that gets skipped
 
 ```
 1. search   — caption-quality search is enough to *locate* a moment
 2. words    — look at real word timings and pauses before choosing boundaries
 3. cut      — end just before a real pause
 ```
+
+Search hits carry **`audio`**: `stored` means the episode is already on disk
+and the cut costs nothing; `not_stored` means the first cut fetches the whole
+episode (~50 MB) and may be refused outright. Check it before planning a beat
+on a quote — that is cheaper than spending the pull to find out.
+
+`words` returns each word with its `index`, and each pause naming the words on
+both sides of it by index. **Do not search the word list by spelling** — a word
+that occurs twice in the window makes that ambiguous.
 
 Caption timestamps are far too coarse to see pauses. `qs cut` extends only
 300 ms looking for one, then stops and fades. Guess, and you get a faded
@@ -80,6 +118,10 @@ prevents, and it costs seconds on the GPU.
    whole reason the field exists.
 3. Boundaries came from `words`, not from caption timestamps.
 4. `tail_clean` is true — or you have said why a faded tail was accepted.
+   Read `caption_alignment` in the same diagnostics too. The guard refuses
+   below 0.45, but **a number that passes can still mean "look harder"** — a
+   real cut came back 0.6667 on a transcript rated `clean`, against 0.9333 on
+   a good one. Passing is not agreement; it is only the absence of a refusal.
 5. **The intent check below has been made.**
 
 **A board** is done when:

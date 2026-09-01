@@ -3,7 +3,7 @@ Semantic search (qs search) arrives with the embedding layer.
 
 Hit shape (shared by grep and search):
 {episode_id, source_id, start, end, text, score,
- episode_title, upload_date, url, url_ts, caption_quality}
+ episode_title, upload_date, url, url_ts, caption_quality, audio}
 
 `caption_quality` is `clean`, `raw` or `unknown` - a prompt to verify, not a
 verdict. `raw` means the transcript reads as machine output and the wording
@@ -13,6 +13,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+from .feedaudio import stored_audio
 from .indexer import connect, _ensure_schema
 from .paths import episode_dir
 from .registry import list_sources
@@ -58,6 +59,27 @@ def _ts_url(url: str, start: float) -> str:
     return f"{url}{sep}t={int(start)}s"
 
 
+def _audio_state(source_id: str, episode_id: str) -> str:
+    """Whether cutting this quote needs the network.
+
+    `stored` means the episode's audio is already on disk, so a cut costs
+    nothing and cannot be refused. `not_stored` means the first cut has to
+    fetch the whole episode (~50 MB, and it may fail - one episode answers
+    403 permanently).
+
+    This is on the hit because that is where the decision is made. It was
+    otherwise knowable only by planning a cut, spending the pull and finding
+    out, which is exactly how it was found. It is deliberately not a third
+    value: a fetch that has never been tried is unknown, not fetchable, and
+    saying otherwise would be a promise this side cannot keep.
+    """
+    try:
+        return "stored" if stored_audio(episode_dir(source_id,
+                                                    episode_id)) else "not_stored"
+    except Exception:
+        return "unknown"
+
+
 def _hit(row) -> dict:
     (episode_id, source_id, start, end, text, score,
      title, upload_date, url, quality) = row
@@ -75,6 +97,8 @@ def _hit(row) -> dict:
         # Whether this wording is worth trusting. transcript_source says who
         # uploaded the captions, which turns out not to answer that.
         "caption_quality": quality or "unknown",
+        # Whether cutting it needs the network.
+        "audio": _audio_state(source_id, episode_id),
     }
 
 

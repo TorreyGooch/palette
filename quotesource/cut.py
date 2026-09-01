@@ -378,9 +378,10 @@ def word_map(episode_id: str, start: float, end: float,
         words = window_words(wav, model_size)
 
     out, prev_end = [], None
-    for w in words:
+    for index, w in enumerate(words):
         gap = None if prev_end is None else round(w["start"] - prev_end, 3)
         out.append({
+            "index": index,
             "word": w["word"],
             "start": round(win_start + w["start"], 3),
             "end": round(win_start + w["end"], 3),
@@ -388,9 +389,16 @@ def word_map(episode_id: str, start: float, end: float,
         })
         prev_end = w["end"]
 
+    # A pause names the words on both sides of it by *index*, not only by
+    # spelling. Selection happens in seconds and everything downstream stores
+    # positions, so a caller handed `after_word: "battle"` has to search the
+    # list by string to get back to a number - and a word that occurs twice
+    # makes that ambiguous. `after_index` is the word to end a cut on;
+    # `next_index` is the word to start the following one on.
     pauses = [
-        {"after_word": out[i - 1]["word"], "at": out[i - 1]["end"],
-         "gap": w["gap_before"]}
+        {"after_index": i - 1, "after_word": out[i - 1]["word"],
+         "next_index": i, "next_word": w["word"],
+         "at": out[i - 1]["end"], "gap": w["gap_before"]}
         for i, w in enumerate(out)
         if i > 0 and w["gap_before"] and w["gap_before"] >= 0.15
     ]

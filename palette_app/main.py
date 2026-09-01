@@ -293,11 +293,10 @@ async def delete_item(iid: str):
 
         remaining = [i for i in lib["items"] if i["id"] != iid]
 
-        # Several items can point at one file — clip filenames truncate their
-        # bounds to whole seconds, so two cuts a fraction apart collide, and
-        # re-staging the same quote makes another item. Unlinking on the first
-        # delete would leave every other item pointing at nothing, so the media
-        # only goes when its last reference does.
+        # Several items can point at one file — re-staging the same quote
+        # makes another item, and a filename has never identified one.
+        # Unlinking on the first delete would leave every other item pointing
+        # at nothing, so the media only goes when its last reference does.
         if not any(i["filename"] == item["filename"] for i in remaining):
             media = root / "media" / item["filename"]
             if media.exists():
@@ -389,6 +388,68 @@ def serve_thumbnail(iid: str):
     if not thumb.exists():
         raise HTTPException(404)
     return FileResponse(str(thumb), media_type="image/jpeg")
+
+
+@app.get("/api/items/{iid}/words")
+def item_words(iid: str, min_gap: float = 0.15):
+    """The clip's own words, indexed, with the pauses between them.
+
+    This closes the seam between choosing and storing. Selection happens in
+    seconds — you hear a pause, you pick a boundary — but everything durable
+    stores *word indices*, because an index means something to a person
+    ("from 'lobster' to 'antidepressants'") and survives a re-cut. Nothing
+    joined the two, so the numbers were converted by hand on every beat: the
+    same subtraction written four times in one session, with a copy-paste in
+    the middle of it.
+
+    `narration.with_gaps` already computed exactly this, but only inside a
+    board GET — you had to commit the clip to a beat before you could see the
+    indices you needed in order to choose the range. The manifest was
+    therefore read off disk instead, going around the API to reach the
+    authoritative artifact. This is that artifact, served.
+
+    Cheap on purpose: it reads `<clip>.words.json` and nothing else. No audio,
+    no whisper, no GPU, no network — which is why it still works on an episode
+    whose media YouTube refuses. `pauses` is usually the only field you need;
+    `words` is there when you want to read the span.
+    """
+    root = _root()
+    item = _find(load_library(root)["items"], iid)
+    if not item:
+        raise HTTPException(404, f"no item '{iid}'")
+
+    from . import narration
+
+    media = root / "media" / (item.get("filename") or "")
+    manifest = narration.load_manifest(media)
+    words = narration.word_list(manifest)
+    if not words:
+        # A pull stages audio without a manifest and an imported file never
+        # had one. Saying so beats an empty list that reads as "no speech".
+        return {"item_id": iid, "filename": item.get("filename"),
+                "precision": "clip", "word_count": 0,
+                "duration": item.get("duration"), "words": [], "pauses": [],
+                "detail": "this clip has no word manifest — only `qs cut` "
+                          "writes one, so its words cannot be indexed"}
+
+    detailed = narration.with_gaps(words, 0, len(words) - 1)
+    pauses = [
+        {"after_index": w["index"] - 1, "after_word": detailed[w["index"] - 1]["word"],
+         "next_index": w["index"], "next_word": w["word"],
+         "at": detailed[w["index"] - 1]["end"], "gap": w["gap_before"]}
+        for w in detailed
+        if w["index"] > 0 and w["gap_before"] and w["gap_before"] >= min_gap
+    ]
+    return {
+        "item_id": iid,
+        "filename": item.get("filename"),
+        "precision": (manifest.get("attribution") or {}).get("precision")
+                     or "word_accurate",
+        "word_count": len(words),
+        "duration": manifest.get("duration") or item.get("duration"),
+        "words": detailed,
+        "pauses": pauses,
+    }
 
 
 @app.get("/api/items/{iid}/fps")
