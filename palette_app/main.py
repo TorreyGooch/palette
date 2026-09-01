@@ -44,6 +44,9 @@ CAPABILITIES = [
     "job_boot_id",  # job ids identify the process, so a restart is legible
     "recut",       # /api/qs/recut corrects a clip's bounds in place
     "words",       # /api/qs/words exposes word timings for picking boundaries
+    "word_index",  # words/pauses carry positions, not just spellings
+    "hit_audio",   # search hits carry audio_stored, so cost is known up front
+    "clip_words",  # /api/items/{id}/words serves a clip's indexed manifest
 ]
 
 

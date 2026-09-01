@@ -243,3 +243,17 @@ def test_an_unanswerable_question_is_null_not_a_guess(corpus, monkeypatch):
     monkeypatch.setattr(search, "episode_dir", gone)
 
     assert search._hit(row())["audio_stored"] is None
+
+
+# -- an older end must degrade legibly, not silently --------------------------
+
+def test_the_new_fields_are_advertised_as_capabilities():
+    """`audio_stored` is produced by the *server*, so a new desktop against an
+    old one sees hits with the field simply absent. That is the failure the
+    capability list exists to prevent — it is how the staging flag went
+    unnoticed — so each of these is announced rather than assumed.
+    """
+    from palette_app import main
+
+    for capability in ("word_index", "hit_audio", "clip_words"):
+        assert capability in main.CAPABILITIES
