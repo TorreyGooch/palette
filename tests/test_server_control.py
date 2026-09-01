@@ -219,7 +219,7 @@ def test_ssh_is_chosen_rather_than_inherited_from_path(monkeypatch):
     monkeypatch.delenv("QS_SSH", raising=False)
     monkeypatch.setattr(main.os, "name", "nt")
     monkeypatch.setenv("SystemRoot", r"C:\Windows")
-    monkeypatch.setattr(main.Path, "exists", lambda self: True)
+    monkeypatch.setattr(main.os.path, "exists", lambda p: True)
 
     assert main._ssh_binary().endswith(r"System32\OpenSSH\ssh.exe")
 

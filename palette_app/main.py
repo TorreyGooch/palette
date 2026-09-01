@@ -1217,10 +1217,13 @@ def _ssh_binary() -> str:
     if explicit:
         return explicit
     if os.name == "nt":
-        system32 = Path(os.environ.get("SystemRoot", r"C:\Windows"))
-        candidate = system32 / "System32" / "OpenSSH" / "ssh.exe"
-        if candidate.exists():
-            return str(candidate)
+        # os.path rather than pathlib: Path() raises on a non-Windows host,
+        # which makes this branch impossible to exercise anywhere else and
+        # buys nothing here.
+        candidate = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                 "System32", "OpenSSH", "ssh.exe")
+        if os.path.exists(candidate):
+            return candidate
     return "ssh"
 
 
