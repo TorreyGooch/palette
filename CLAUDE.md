@@ -172,13 +172,21 @@ source `people` lists and episode title/description), `--after/--before
 YYYY-MM-DD`, `--limit N`.
 
 Hit shape: `{episode_id, source_id, start, end, text, score, episode_title,
-upload_date, url, url_ts, caption_quality, audio}`. **`audio` says whether
-cutting this quote needs the network**: `stored` means the episode's audio is
-already on disk, so a cut costs nothing and cannot be refused; `not_stored`
-means the first cut fetches the whole episode (~50 MB, and it can fail — one
-episode answers 403 permanently). It is deliberately not `fetchable`: a fetch
-nobody has tried is unknown, and promising otherwise would be a promise this
-side cannot keep. `qs search` JSON wraps hits with `coverage`
+upload_date, url, url_ts, caption_quality, audio_stored}`. **`audio_stored`
+says whether cutting this quote needs the network**: `true` means the episode's
+audio is already on disk and the cut costs nothing; `false` means the first cut
+fetches the whole episode (~50 MB) and may be refused. `null` means the
+question could not be answered.
+
+It is a bool rather than `stored | fetchable | refused` on purpose.
+`fetchable` is a prediction dressed as a fact — nothing knows an episode can be
+fetched until it fetches it. `refused` is a fact about *an attempt*: a 403
+decays, the audio never changed, and storing it as a property of the episode
+is a verdict that goes stale silently. That is the same conflation that made
+`words` report "audio not stored" for a CUDA failure, and **pipeline stage is
+derived, never stored** already covers it. Evidence about attempts, if it is
+ever wanted, belongs beside this and *dated* — an undated `refused` cannot be
+aged by its reader; `403 on 2026-08-31` can. `qs search` JSON wraps hits with `coverage`
 (fraction of chunks embedded — treat <1.0 as "results may be incomplete").
 
 Errors: `{"error": msg}` on stderr, exit 1 (2 for usage).

@@ -3,7 +3,7 @@ Semantic search (qs search) arrives with the embedding layer.
 
 Hit shape (shared by grep and search):
 {episode_id, source_id, start, end, text, score,
- episode_title, upload_date, url, url_ts, caption_quality, audio}
+ episode_title, upload_date, url, url_ts, caption_quality, audio_stored}
 
 `caption_quality` is `clean`, `raw` or `unknown` - a prompt to verify, not a
 verdict. `raw` means the transcript reads as machine output and the wording
@@ -59,25 +59,34 @@ def _ts_url(url: str, start: float) -> str:
     return f"{url}{sep}t={int(start)}s"
 
 
-def _audio_state(source_id: str, episode_id: str) -> str:
-    """Whether cutting this quote needs the network.
+def _audio_stored(source_id: str, episode_id: str):
+    """Whether the episode's audio is already on disk. True, False, or unknown.
 
-    `stored` means the episode's audio is already on disk, so a cut costs
-    nothing and cannot be refused. `not_stored` means the first cut has to
-    fetch the whole episode (~50 MB, and it may fail - one episode answers
-    403 permanently).
+    This is on the hit because that is where the decision is made: `True`
+    means a cut costs nothing, `False` means the first one fetches the whole
+    episode (~50 MB) and may be refused. It was otherwise knowable only by
+    planning a cut, spending the pull and finding out.
 
-    This is on the hit because that is where the decision is made. It was
-    otherwise knowable only by planning a cut, spending the pull and finding
-    out, which is exactly how it was found. It is deliberately not a third
-    value: a fetch that has never been tried is unknown, not fetchable, and
-    saying otherwise would be a promise this side cannot keep.
+    **A bool rather than an enum, on purpose.** The obvious shape was
+    `stored | fetchable | refused`, and two of those three are wrong.
+    `fetchable` is a prediction dressed as a fact — nothing knows an episode
+    can be fetched until it fetches it. `refused` is a fact about *an
+    attempt*, at a moment, by us: a 403 decays, the audio never changed, and
+    storing it as a property of the episode makes a verdict that goes stale
+    silently. That is the same conflation that made `words` report "audio not
+    stored" for a CUDA failure, and the house rule against it is already
+    written down — a stored stage goes stale and then lies.
+
+    So this answers one question about the artifact, checked at read time.
+    `None` means the question could not be answered, which is the absence of a
+    fact rather than a third state of the world. Evidence about attempts, if
+    it is ever wanted, belongs beside it and dated — an undated `refused`
+    cannot be aged by its reader; `403 on 2026-08-31` can.
     """
     try:
-        return "stored" if stored_audio(episode_dir(source_id,
-                                                    episode_id)) else "not_stored"
+        return bool(stored_audio(episode_dir(source_id, episode_id)))
     except Exception:
-        return "unknown"
+        return None
 
 
 def _hit(row) -> dict:
@@ -98,7 +107,7 @@ def _hit(row) -> dict:
         # uploaded the captions, which turns out not to answer that.
         "caption_quality": quality or "unknown",
         # Whether cutting it needs the network.
-        "audio": _audio_state(source_id, episode_id),
+        "audio_stored": _audio_stored(source_id, episode_id),
     }
 
 

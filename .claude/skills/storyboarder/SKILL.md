@@ -90,10 +90,12 @@ Do not recompute gaps by hand and do not read the `.words.json` off disk.
 3. cut      — end just before a real pause
 ```
 
-Search hits carry **`audio`**: `stored` means the episode is already on disk
-and the cut costs nothing; `not_stored` means the first cut fetches the whole
-episode (~50 MB) and may be refused outright. Check it before planning a beat
-on a quote — that is cheaper than spending the pull to find out.
+Search hits carry **`audio_stored`**: `true` means the episode is already on
+disk and the cut costs nothing; `false` means the first cut fetches the whole
+episode (~50 MB) and may be refused outright; `null` means the question could
+not be answered. Check it before planning a beat on a quote — that is cheaper
+than spending the pull to find out. It says nothing about whether a fetch
+*would* succeed, because nothing knows that until it tries.
 
 `words` returns each word with its `index`, and each pause naming the words on
 both sides of it by index. **Do not search the word list by spelling** — a word

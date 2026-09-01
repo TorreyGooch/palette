@@ -200,18 +200,22 @@ def test_a_hit_whose_audio_is_on_disk_says_stored(corpus):
     ep.mkdir(parents=True)
     (ep / "audio.m4a").write_bytes(b"x")
 
-    assert search._hit(row())["audio"] == "stored"
+    assert search._hit(row())["audio_stored"] is True
 
 
-def test_a_hit_with_no_stored_audio_says_so(corpus):
-    """Not "fetchable" — one episode answers 403 permanently, and this side
-    cannot promise a fetch it has never tried."""
+def test_a_hit_with_no_stored_audio_says_false_not_a_verdict(corpus):
+    """Not "fetchable" and not "refused".
+
+    Nothing knows an episode can be fetched until it fetches it, and a 403 is
+    a fact about one attempt that decays - so neither belongs in a field read
+    as a property of the episode.
+    """
     from quotesource import search
     from quotesource.paths import episode_dir
 
     episode_dir("src", "EP1").mkdir(parents=True)
 
-    assert search._hit(row())["audio"] == "not_stored"
+    assert search._hit(row())["audio_stored"] is False
 
 
 def test_the_state_is_per_episode_not_per_source(corpus):
@@ -224,13 +228,13 @@ def test_the_state_is_per_episode_not_per_source(corpus):
         if has_audio:
             (d / "audio.m4a").write_bytes(b"x")
 
-    assert search._hit(row("EP1"))["audio"] == "stored"
-    assert search._hit(row("EP2"))["audio"] == "not_stored"
+    assert search._hit(row("EP1"))["audio_stored"] is True
+    assert search._hit(row("EP2"))["audio_stored"] is False
 
 
-def test_audio_state_never_breaks_a_search(corpus, monkeypatch):
-    """A hit is worth returning even when the audio question cannot be
-    answered — it is an annotation, not a precondition."""
+def test_an_unanswerable_question_is_null_not_a_guess(corpus, monkeypatch):
+    """A hit is worth returning even when the question cannot be answered, and
+    `None` is the absence of a fact rather than a third state of the world."""
     from quotesource import search
 
     def gone(*a, **k):
@@ -238,4 +242,4 @@ def test_audio_state_never_breaks_a_search(corpus, monkeypatch):
 
     monkeypatch.setattr(search, "episode_dir", gone)
 
-    assert search._hit(row())["audio"] == "unknown"
+    assert search._hit(row())["audio_stored"] is None
