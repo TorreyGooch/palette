@@ -61,6 +61,39 @@ def clamp_range(count: int, start, end) -> tuple:
     return (max(0, min(lo, count - 1)), max(0, min(hi, count - 1)))
 
 
+def with_gaps(words: list, lo: int, hi: int) -> list:
+    """The words of a span, each carrying the silence before it.
+
+    The pause between two words is arithmetic on times the manifest already
+    holds, and it is the one thing prose cannot show you. A 20.3s beat was
+    split into three by reading these: 700 ms after "hierarchies.", 360 ms
+    after the second, and 1360 ms after "strangely," - the speaker holding
+    before the payload. The split that looked obvious from *reading* the
+    transcript was the weakest pause of the three.
+
+    `gap_before` on the first word of a span is measured from the previous
+    word in the clip, so a span that starts mid-sentence says so. It is None
+    only at the very start of the clip, where there is nothing to measure
+    from.
+    """
+    out = []
+    for index in range(lo, hi + 1):
+        word = words[index]
+        gap = None
+        if index > 0:
+            previous = words[index - 1]
+            gap = round(max(0.0, float(word.get("start", 0.0))
+                            - float(previous.get("end", 0.0))), 3)
+        out.append({
+            "index": index,
+            "word": str(word.get("word", "")),
+            "start": round(float(word.get("start", 0.0)), 3),
+            "end": round(float(word.get("end", 0.0)), 3),
+            "gap_before": gap,
+        })
+    return out
+
+
 def summarize(words: list, start=None, end=None) -> Optional[dict]:
     """Times and text for an inclusive word range, or None if there are none."""
     lo, hi = clamp_range(len(words), start, end)
@@ -78,6 +111,10 @@ def summarize(words: list, start=None, end=None) -> Optional[dict]:
         "duration": round(max(0.0, finish - begin), 3),
         "text": text,
         "word_count": len(chosen),
+        # What the page needs to show where the pauses are, and to let someone
+        # split a beat on one. Only the span's words: a board of five beats
+        # would otherwise carry five copies of every clip's full word list.
+        "words": with_gaps(words, lo, hi),
     }
 
 
@@ -101,6 +138,7 @@ def bind(media_dir: Path, item: dict, word_start=None, word_end=None) -> dict:
         "duration": None,
         "text": None,
         "word_count": 0,
+        "words": [],
         # How many words the clip has in all, as distinct from how many this
         # beat uses. Choosing indices needs the ceiling: word_count alone
         # reads as the total and is not, so "6 - 14 of 9" is what you get.

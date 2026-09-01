@@ -479,7 +479,69 @@ const Storyboard = {
             n.word_total || 0} words are in this beat">of ${n.word_total || 0}</span>
         </div>
         ${n.audio_url ? `<audio controls preload="none" src="${esc(n.audio_url)}"></audio>` : ''}
+        ${this.pauseStrip(p, i)}
       </div>`;
+  },
+
+  // The pause structure, which is the actual creative handle and was the one
+  // thing the page could not show. Every qs cut clip has per-word times in its
+  // manifest, so the gaps are subtraction — no GPU, no network, no new data.
+  //
+  // Prose cannot show you a hold. On this board the split that looked obvious
+  // from reading the transcript was the *weakest* pause in the clip; the real
+  // break was a 1360ms hesitation before the payload, visible only here.
+  pauseStrip(p, i) {
+    const words = (p.narration || {}).words || [];
+    if (words.length < 2) return '';
+    const gaps = words.map(w => w.gap_before).filter(g => g != null);
+    const longest = gaps.length ? Math.max(...gaps) : 0;
+
+    const bits = words.map((w, k) => {
+      // The first word's gap is where this beat begins, not a split point
+      // inside it, so it is shown and not clickable.
+      const splittable = k > 0;
+      const gap = w.gap_before;
+      let sep = '';
+      if (gap != null && (k > 0 || gap >= 0.12)) {
+        const strong = longest > 0 && gap >= Math.max(0.25, longest * 0.6);
+        sep = `<span class="sb-gap${strong ? ' strong' : ''}${splittable ? ' hit' : ''}"
+                     title="${Math.round(gap * 1000)} ms pause${
+                       splittable ? ' — click to split the beat here' : ''}"
+                     ${splittable ? `onclick="Storyboard.splitAt(${i}, ${w.index})"` : ''}
+                     >${gap >= 0.12 ? Math.round(gap * 1000) : ''}</span>`;
+      }
+      return sep + `<span class="sb-word">${esc(w.word)}</span>`;
+    });
+
+    return `<div class="sb-pauses" title="Click a gap to split this beat">${
+      bits.join('')}</div>`;
+  },
+
+  // Split a beat at a pause: the words before it stay, the rest become a new
+  // beat immediately after. The note stays with the first — it explains the
+  // reasoning that was written about that opening, and the new beat needs its
+  // own rather than inheriting a claim about different words.
+  splitAt(idx, wordIndex) {
+    if (!this.board) return;
+    const panel = this.board.panels[idx];
+    const n = panel?.narration;
+    if (!n) return;
+    const first = n.word_start ?? 0;
+    const last = n.word_end ?? (n.word_total ? n.word_total - 1 : 0);
+    if (wordIndex <= first || wordIndex > last) return;
+
+    const tail = {
+      narration: { item_id: n.item_id, word_start: wordIndex, word_end: last },
+      note: '',
+      video_prompt: '',
+    };
+    this.board.panels[idx] = {
+      ...panel,
+      narration: { item_id: n.item_id, word_start: first, word_end: wordIndex - 1 },
+    };
+    this.board.panels.splice(idx + 1, 0, tail);
+    this.renderPanels();
+    this.save(true);
   },
 
   renderEstimate() {

@@ -344,3 +344,61 @@ def test_word_total_is_zero_when_there_is_no_manifest(library):
     binding = nr.bind(library / "media", item)
     assert binding["word_total"] == 0
     assert binding["precision"] == "clip"
+
+
+# ── the pause structure, which is what the page could not show ────────────────
+
+def test_gaps_are_measured_between_words(library):
+    """Arithmetic on times the manifest already holds. No GPU, no network."""
+    item = audio_item(library, "c.m4a", "a1")
+    words = nr.bind(library / "media", item)["words"]
+
+    assert len(words) == len(WORDS)
+    assert words[0]["gap_before"] is None, "nothing precedes the first word"
+    # The fixture lays words end-to-end, so every interior gap is zero.
+    assert all(w["gap_before"] == 0.0 for w in words[1:])
+
+
+def test_a_real_hold_shows_up_as_a_gap(library):
+    """The 1360ms hesitation that no amount of reading the transcript reveals."""
+    import json
+
+    (library / "media" / "held.m4a").write_bytes(b"\x00")
+    (library / "media" / "held.words.json").write_text(json.dumps({
+        "duration": 5.0,
+        "words": [{"word": "strangely,", "start": 0.0, "end": 0.6},
+                  {"word": "the", "start": 1.96, "end": 2.2},
+                  {"word": "lobster", "start": 2.25, "end": 2.8}]}),
+        encoding="utf-8")
+    add_item(library, "held.m4a", "held-1")
+    item = nr.load_manifest  # noqa: F841  (imported for clarity of intent)
+
+    from conftest import read_library
+
+    stored = next(i for i in read_library(library)["items"] if i["id"] == "held-1")
+    words = nr.bind(library / "media", stored)["words"]
+
+    assert words[1]["gap_before"] == 1.36
+    assert words[2]["gap_before"] == pytest.approx(0.05)
+
+
+def test_only_the_beats_own_words_are_carried(library):
+    """A board of five beats must not ship five whole word lists."""
+    item = audio_item(library, "c.m4a", "a1")
+
+    span = nr.bind(library / "media", item, 2, 4)["words"]
+    assert [w["index"] for w in span] == [2, 3, 4]
+    assert [w["word"] for w in span] == WORDS[2:5]
+
+
+def test_a_spans_first_gap_is_measured_from_the_word_before_it(library):
+    """A beat starting mid-sentence should say so rather than claim silence."""
+    item = audio_item(library, "c.m4a", "a1")
+
+    span = nr.bind(library / "media", item, 3, 5)["words"]
+    assert span[0]["gap_before"] is not None
+
+
+def test_a_clip_without_a_manifest_carries_no_words(library):
+    item = audio_item(library, "bare.m4a", "a2", with_manifest=False)
+    assert nr.bind(library / "media", item)["words"] == []
