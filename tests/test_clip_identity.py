@@ -52,6 +52,29 @@ def test_two_cuts_that_shared_a_name_in_the_real_library_no_longer_do():
 
 # -- identity survives the edit ----------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _no_ffmpeg(monkeypatch):
+    """Keep this file to the suite's contract: no ffmpeg, anywhere.
+
+    replace_item_media probes the new media and rebuilds the thumbnail, both
+    of which shell out. It passed locally because this machine has ffmpeg and
+    failed on the Windows runner, which does not - the exact asymmetry the
+    two-OS CI exists to catch, and a reminder that "it passed here" is not the
+    claim conftest makes.
+    """
+    async def fake_probe(path):
+        return {"duration": 9.7, "fps": None}
+
+    async def fake_audio_thumbnail(path, thumb):
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        thumb.write_bytes(b"JPEG")
+        return True
+
+    monkeypatch.setattr("palette_app.api.media.probe", fake_probe)
+    monkeypatch.setattr("palette_app.api.media.audio_thumbnail",
+                        fake_audio_thumbnail)
+
+
 @pytest.fixture
 def staged(library):
     """A library holding one cut clip, with a manifest and a board-ish note."""
