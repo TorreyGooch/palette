@@ -110,6 +110,11 @@ two hits are the same talk when either names the other, or both name the same
 third. Cutting from both would ship one moment twice under two speakers'
 credits.
 
+Until the corpus has been linked at least once, every `duplicate_of` is null
+and that means *not computed*, not *not a duplicate*. `qs status` reports
+`index.duplicates.linked_at`; while it is null, treat the field as silent and
+keep checking by hand. Linking is the Researcher's to run.
+
 **Check `matches_cut_window` before you cut from a view.** `words` is a preview
 of the cut, and by default now uses the cut's own window and audio offset, so
 what you choose from is what the manifest will be built from. It did not

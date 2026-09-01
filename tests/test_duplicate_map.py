@@ -201,3 +201,47 @@ def test_a_hit_carries_the_link(tmp_path, monkeypatch):
            "https://y/watch?v=bbb", "clean", "aaa")
 
     assert search._hit(row)["duplicate_of"] == "aaa"
+
+
+# -- null must not mean two things --------------------------------------------
+
+def test_a_run_records_that_it_happened(con):
+    """`duplicate_of: null` otherwise says both "checked, no twin" and "never
+    checked", and a reader cannot tell which — which would be read as
+    permission to cut the same moment twice under two attributions."""
+    episode(con, "aaa", "levin_yt", TALK, 3600)
+
+    link_duplicates(con)
+
+    stamp = con.execute("SELECT value FROM index_meta "
+                        "WHERE key = 'duplicates_linked_at'").fetchone()
+    assert stamp and stamp[0]
+
+
+def test_before_any_run_there_is_no_stamp(con):
+    assert con.execute("SELECT value FROM index_meta "
+                       "WHERE key = 'duplicates_linked_at'").fetchone() is None
+
+
+def test_a_later_run_replaces_the_stamp_rather_than_adding_one(con):
+    episode(con, "aaa", "levin_yt", TALK, 3600)
+    link_duplicates(con)
+    link_duplicates(con)
+
+    rows = con.execute("SELECT value FROM index_meta "
+                       "WHERE key = 'duplicates_linked_at'").fetchall()
+    assert len(rows) == 1
+
+
+def test_status_reports_whether_it_has_ever_run(tmp_path, monkeypatch):
+    from quotesource import indexer
+    from quotesource.status import corpus_status
+
+    monkeypatch.setenv("QUOTESOURCE_DATA", str(tmp_path))
+    (tmp_path / "episodes").mkdir(parents=True, exist_ok=True)
+    connection = indexer.connect()
+    indexer._ensure_schema(connection)
+    connection.close()
+
+    block = corpus_status()["index"]["duplicates"]
+    assert block == {"linked_at": None, "episodes": 0}

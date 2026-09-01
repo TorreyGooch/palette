@@ -140,6 +140,12 @@ ago. Check it before spending whisper on a backlog: 108 of 186 thoughtforms
 episodes duplicate `levin_yt`, which is ~9 GPU-hours of transcription that did
 not need doing.
 
+**It ships dark.** The column is created by the migration; the links are not
+computed until `qs index` runs, and until then every `duplicate_of` is null —
+which reads as "no duplicate" and is not. `qs status` reports
+`index.duplicates.linked_at`, null until the first run. Running that index is
+yours; nobody else's role touches it.
+
 **A threshold records its own evidence.** An ingest that applies a
 `min_duration` writes back what it saw — enumerated, excluded, the longest
 excluded and the shortest kept, plus the threshold it was measured against.

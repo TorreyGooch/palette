@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS chunks (
     start REAL, end REAL, text TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_episode ON chunks(episode_id);
+CREATE TABLE IF NOT EXISTS index_meta (
+    key TEXT PRIMARY KEY, value TEXT
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     text, content='chunks', content_rowid='id', tokenize='porter unicode61'
 );
@@ -259,9 +262,33 @@ def link_duplicates(con: sqlite3.Connection) -> dict:
                 "WHERE duplicate_of IS NOT NULL")
     con.executemany("UPDATE episodes SET duplicate_of = ? WHERE episode_id = ?",
                     [(canonical, eid) for eid, canonical in groups.items()])
+    # Without this, `duplicate_of: null` says two different things - "checked,
+    # not a duplicate" and "never checked" - and a reader cannot tell which.
+    # That is the shape of every plausible-but-wrong signal this codebase
+    # refuses to emit, and here it would be read as permission to cut the same
+    # moment twice under two attributions.
+    con.execute("INSERT INTO index_meta (key, value) VALUES ('duplicates_linked_at', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (datetime.now().isoformat(timespec="seconds"),))
     con.commit()
     return {"duplicates": len(groups),
             "groups": len(set(groups.values()))}
+
+
+def duplicates_linked_at():
+    """When duplicate linking last ran, or None if it never has.
+
+    `duplicate_of` is null both for an episode with no twin and for a corpus
+    that has not been linked since the column was added. Only this
+    distinguishes them, so anything reporting duplicates has to report this
+    beside it - the same reason `coverage` rides with search results.
+    """
+    con = connect()
+    _ensure_schema(con)
+    row = con.execute("SELECT value FROM index_meta "
+                      "WHERE key = 'duplicates_linked_at'").fetchone()
+    con.close()
+    return row[0] if row else None
 
 
 def chunk_segments(segments: list[dict]) -> list[dict]:
@@ -400,6 +427,15 @@ def index_stats() -> dict:
     _ensure_schema(con)
     eps = con.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
     chunks = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    dupes = con.execute("SELECT COUNT(*) FROM episodes "
+                        "WHERE duplicate_of IS NOT NULL").fetchone()[0]
+    linked = con.execute("SELECT value FROM index_meta "
+                         "WHERE key = 'duplicates_linked_at'").fetchone()
     con.close()
     return {"exists": True, "episodes": eps, "chunks": chunks,
-            "db_mb": round(p.stat().st_size / 1048576, 1)}
+            "db_mb": round(p.stat().st_size / 1048576, 1),
+            # `linked_at: null` means duplicate_of has never been computed, so
+            # every null on a hit means "not checked" rather than "not a
+            # duplicate". Run `qs index` to fill it.
+            "duplicates": {"linked_at": linked[0] if linked else None,
+                           "episodes": dupes}}

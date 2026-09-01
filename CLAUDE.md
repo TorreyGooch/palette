@@ -193,6 +193,13 @@ genuinely different material — one at 3247 s against 1339 s. An episode of
 unknown duration is never matched, because there is nothing to confirm the
 guess with.
 
+**A null means "not computed" until the corpus has been linked at least once.**
+`qs status` reports `index.duplicates.linked_at`, and while that is null every
+`duplicate_of` on every hit is silence rather than a verdict — the column
+exists from the migration, the links do not exist until `qs index` runs. Check
+it before reading a null as "not a duplicate", the same way `coverage` is
+checked before reading a thin result set as "nothing there".
+
 **`audio_stored`
 says whether cutting this quote needs the network**: `true` means the episode's
 audio is already on disk and the cut costs nothing; `false` means the first cut
