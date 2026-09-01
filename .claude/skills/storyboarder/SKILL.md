@@ -39,7 +39,8 @@ A 503 means the corpus server is off, not broken. Start it.
 ## What you may write
 
 - **Cuts and staged items** — via the API, never by editing `library.json`.
-  Other sessions write to that file and it has no lock.
+  The app serialises its own writes now; an editor bypassing it does not, and
+  `settings.json` denies writing under the library path for that reason.
 - **Tags and palettes** — curation.
 - **Boards and beats** — order, notes, word ranges, visual references.
 - Imported reference images.
@@ -72,7 +73,11 @@ prevents, and it costs seconds on the GPU.
 1. You read it in `context`, not just as a search hit. Chunk text is ~70 words
    and quotes routinely span chunk borders.
 2. You verified the wording against the transcript rather than trusting the
-   caption. Peterson's are auto-captions and mis-hear words.
+   caption. Every hit carries `caption_quality`: `raw` means the transcript
+   reads as machine output and must not be quoted unchecked; `clean` is a
+   prior, not a guarantee. `transcript_source: manual` is **not** a quality
+   signal — creators upload auto-caption dumps as manual tracks, which is the
+   whole reason the field exists.
 3. Boundaries came from `words`, not from caption timestamps.
 4. `tail_clean` is true — or you have said why a faded tail was accepted.
 5. **The intent check below has been made.**
@@ -89,6 +94,13 @@ prevents, and it costs seconds on the GPU.
    snaps outward shifts every index and the beat quietly says something else.
    **After any `recut`, read `beats_drifted` in the result** and re-check the
    note above each beat it names. Nothing else will tell you.
+5. Long quotes have been read as **pauses, not prose**. The app draws a strip
+   under a narration beat marking the gap in milliseconds between every word,
+   with the holds worth splitting on highlighted; clicking one splits the beat
+   there and the note stays with the first half. Read the gaps — a 20.3s beat
+   split cleanly on a 1360 ms hold before the payload, while the split the
+   transcript *read* as obvious turned out to be the weakest pause of the three.
+   Prose cannot show you a hold.
 
 ## The intent check
 
@@ -110,9 +122,15 @@ No tool can catch this. It is why a person drives this seat.
   disagree — which is a *corpus* problem, so report it to the Researcher. It
   usually means an episode was linked to the wrong feed audio or given a bad
   offset.
-- **A quote needs re-cutting** (wrong boundary, trailing fragment). Say so
-  before doing it: re-cutting mints a **new item with a new id**, which
-  silently orphans every board that referenced the old one.
+- **A quote needs re-cutting** (wrong boundary, trailing fragment). Use
+  `POST /api/qs/recut {item_id, start, end}`. It re-cuts in place, keeping the
+  item's id, tags, palettes and every beat pointing at it — do **not** cut a
+  fresh clip and repoint the board by hand.
+  What a recut does *not* keep is which words a beat's range names. Indices
+  are positions in the manifest and recut regenerates the manifest, so a cut
+  that snaps outward shifts every one of them and the beat quietly says
+  something else. **Read `beats_drifted` in the result and re-check the note
+  above every beat it names.** Nothing else will tell you.
 - **The material is not in the corpus.** Hand it to the Researcher rather than
   ingesting it yourself.
 
@@ -128,12 +146,21 @@ one piece and they carry no intent.
 
 ## Things that will bite
 
-- A beat needs a visual **or** a narration — one of them. A beat with neither
-  is dropped on save.
+- A beat needs a visual, a narration, **or** a `video_prompt` — any one of
+  the three. A beat with none of them is dropped on save. A prompt-only beat
+  is a real beat, not a placeholder: it says what to generate for a moment
+  nothing exists for yet, and a board of them reads as a shot list.
 - `PATCH` replaces the panel list **wholesale**. Send the whole list back.
 - Narration times are **derived** from the word manifest on every read. Do not
   set `start`, `end` or `duration`; they are ignored and re-read.
-- Clip filenames truncate to whole seconds, so two cuts a fraction of a second
-  apart share one file. A filename does not identify an item.
+- A filename does not identify an item. Clip names carry their bounds in
+  **milliseconds** now, so a sub-second correction no longer overwrites the
+  previous clip's audio and manifest — but several items can still
+  legitimately share one file.
+- **Tag with `POST /api/items/batch-tag`, not `PATCH /api/items/{id}`.**
+  Batch-tag adds or removes one tag and is safe under concurrency; a whole-list
+  PATCH sends back a list you computed before another session's write and
+  silently discards it. Measured on this library: 8 concurrent batch-tags all
+  landed, 8 concurrent PATCHes left 2.
 - **`--mode av` costs ~50x** an audio pull and downloads the whole episode.
   Only when you actually need the picture.

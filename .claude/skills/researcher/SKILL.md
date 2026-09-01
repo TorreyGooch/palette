@@ -119,8 +119,10 @@ Operating rules that still matter:
   Plan a large channel as few runs, not many.
 - Use `--limit` and run in **small batches**. Do not run `--all` on a large
   channel unattended.
-- **Roughly 300 caption fetches a day** is the observed ceiling before 429s
-  start. Spread a big channel over several days.
+- **The enforced daily figure is 200**, below the ~300 that was once the
+  working ceiling — because density, not volume, is what trips a limit: the
+  hard 429 arrived at ~120 requests inside 25 minutes. Spread a big channel
+  over several days.
 - Never run two ingests at once, on either machine.
 - Prefer an **RSS source** where the same material exists: podcast CDNs serve
   range requests happily and have no rate limit worth the name. YouTube is for
