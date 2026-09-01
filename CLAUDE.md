@@ -509,6 +509,22 @@ curl -s "$API/words?episode_id=PWasTAtR6Ns&start=477&end=490"
 #                    "at": 487.06, "gap": 0.2}]}
 ```
 
+**This view is a preview of the cut, and now actually agrees with one.** It
+had two silent disagreements. It ignored `audio_provenance.offset_s`, which
+`cut` applies wherever it touches the audio — so on the **55 episodes carrying
+a measured offset** (up to −61 s) it read a different passage than the cut
+would take, and the alignment guard cannot catch that because the *cut* is
+correctly offset and passes. And it defaulted to a narrower window than the
+cut's, while whisper is stable for a given window and disagrees between window
+widths — observed inserting a word a wider pass does not have, which shifts
+every index after it.
+
+So `pad` now defaults to `QS_CUT_WINDOW_PAD_S`, and the response reports
+`window_pad_s`, `audio_offset_s`, `matches_cut_window` and `min_gap`. Pass a
+smaller pad only for a cheaper look you do not intend to cut from —
+`matches_cut_window` will say `false`. `min_gap` is reported because an empty
+`pauses` list and "no pauses above this threshold" otherwise look identical.
+
 **A pause names the words beside it by index, not only by spelling.** Selection
 happens in seconds and everything durable stores positions, so a caller handed
 only `after_word` has to search the list by string to get back to a number —

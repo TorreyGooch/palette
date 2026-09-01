@@ -47,6 +47,7 @@ CAPABILITIES = [
     "word_index",  # words/pauses carry positions, not just spellings
     "hit_audio",   # search hits carry audio_stored, so cost is known up front
     "clip_words",  # /api/items/{id}/words serves a clip's indexed manifest
+    "words_match_cut",  # the words view uses the cut's window and audio offset
 ]
 
 
@@ -1064,7 +1065,8 @@ def _words_failure_detail(error: Exception, episode_id: str = "") -> str:
 
 
 @app.get("/api/qs/words")
-def qs_words(episode_id: str, start: float, end: float, pad: float = 0.0,
+def qs_words(episode_id: str, start: float, end: float,
+             pad: Optional[float] = None,
              model: Optional[str] = None):
     """Word timings and pauses, for choosing cut boundaries.
 

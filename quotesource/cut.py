@@ -357,24 +357,52 @@ def window_words(wav_path: Path, model_size: str | None = None) -> list[dict]:
 
 
 def word_map(episode_id: str, start: float, end: float,
-             pad: float = 3.0, model_size: str | None = None) -> dict:
+             pad: float | None = None, model_size: str | None = None) -> dict:
     """Word timings and the pauses between them, in absolute source time.
 
     Use this to choose cut boundaries: `qs cut` ends where you tell it, and
     the natural place to end is just before a pause. Caption timestamps are
     too coarse to see those.
+
+    **This has to agree with `cut`, because it is the view the cut is chosen
+    from.** It did not, in two ways, and both were silent:
+
+    - It ignored `audio_provenance.offset_s`, which `cut` applies wherever it
+      touches the audio. On the 55 episodes carrying a measured offset (up to
+      -61s) this read a different passage than the cut would take, so the
+      words shown were not the words you got. The alignment guard cannot catch
+      that: the *cut* is correctly offset and passes, and it is the view used
+      to choose it that was wrong.
+    - It defaulted to a narrower window than the cut's. Whisper is stable for
+      a given window and disagrees between window widths — observed inserting
+      a word ("that") that a wider pass does not have, which shifts every
+      index after it. Since the manifest that gets stored comes from the cut's
+      window, choosing from a different one can leave a beat wrong at birth,
+      not only after a recut.
+
+    So `pad` now defaults to the cut's own `WINDOW_PAD_S`. Pass a smaller one
+    only when you want a cheaper look and do not intend to cut from it.
     """
     ep_dir = _find_episode_dir(episode_id)
     if not ep_dir:
         raise FileNotFoundError(f"episode '{episode_id}' not found")
     src = _source_media(episode_id, ep_dir)
+    pad = WINDOW_PAD_S if pad is None else float(pad)
+
+    try:
+        meta = json.loads((ep_dir / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    audio_offset = float((meta.get("audio_provenance") or {}).get("offset_s") or 0.0)
 
     win_start = max(0.0, start - pad)
     win_dur = (end + pad) - win_start
 
     with tempfile.TemporaryDirectory() as tmp:
         wav = Path(tmp) / "w.wav"
-        _decode_window(src, win_start, win_dur, wav)
+        # Reported times stay in transcript time; the offset is applied only
+        # where the audio file is actually touched. Exactly as `cut` does it.
+        _decode_window(src, win_start + audio_offset, win_dur, wav)
         words = window_words(wav, model_size)
 
     out, prev_end = [], None
@@ -404,6 +432,12 @@ def word_map(episode_id: str, start: float, end: float,
     ]
     return {"episode_id": episode_id, "window": [round(win_start, 3),
                                                  round(win_start + win_dur, 3)],
+            # What this view was produced with, so a caller can tell whether
+            # it matches the cut it is about to make.
+            "window_pad_s": round(pad, 3),
+            "audio_offset_s": audio_offset,
+            "matches_cut_window": pad == WINDOW_PAD_S,
+            "min_gap": 0.15,
             "words": out, "pauses": pauses}
 
 

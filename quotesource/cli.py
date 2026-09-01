@@ -628,7 +628,9 @@ def main(argv=None):
                        parents=[shared])
     p.add_argument("episode_id")
     p.add_argument("--range", nargs=2, type=float, required=True, metavar=("START", "END"))
-    p.add_argument("--pad", type=float, default=3.0, help="seconds of context each side (default 3)")
+    p.add_argument("--pad", type=float, default=None,
+                   help="seconds of context each side (default: the cut's own "
+                        "window, so what you see is what you would get)")
     p.add_argument("--model", help="whisper model (default: env/auto; use small or better)")
     p.set_defaults(func=cmd_words)
 

@@ -101,6 +101,22 @@ than spending the pull to find out. It says nothing about whether a fetch
 both sides of it by index. **Do not search the word list by spelling** — a word
 that occurs twice in the window makes that ambiguous.
 
+**Check `matches_cut_window` before you cut from a view.** `words` is a preview
+of the cut, and by default now uses the cut's own window and audio offset, so
+what you choose from is what the manifest will be built from. It did not
+before, in two ways that were both silent: it ignored the measured audio offset
+(55 episodes carry one, up to −61 s, so it showed a passage a minute away from
+what the cut would take), and it used a narrower window than the cut — and
+whisper disagrees between window widths, which can insert or drop a word and
+shift every index after it. That is how a beat can be **wrong at birth**, not
+only drifted after a recut. If you pass a smaller `pad` for a cheap look,
+`matches_cut_window` goes `false` and you should not index off it.
+
+Also read `min_gap` in the response. An empty `pauses` list and "no pauses
+above this threshold" look identical otherwise — a real session read "nothing
+printed" as "no pause data" on a speaker whose gaps run 120–180 ms, and spent
+a second whisper call rediscovering numbers it already had.
+
 Caption timestamps are far too coarse to see pauses. `qs cut` extends only
 300 ms looking for one, then stops and fades. Guess, and you get a faded
 run-on or a trailing fragment like *"You know, it's so,"*. That is what step 2
