@@ -221,7 +221,12 @@ def test_ssh_is_chosen_rather_than_inherited_from_path(monkeypatch):
     monkeypatch.setenv("SystemRoot", r"C:\Windows")
     monkeypatch.setattr(main.os.path, "exists", lambda p: True)
 
-    assert main._ssh_binary().endswith(r"System32\OpenSSH\ssh.exe")
+    # Component-wise, not as a literal path: os.path.join uses the host
+    # separator, so a backslash assertion only holds on the host it was
+    # written on - which is the whole thing this test is trying not to be.
+    chosen = main._ssh_binary()
+    assert chosen.endswith("ssh.exe")
+    assert "System32" in chosen and "OpenSSH" in chosen
 
 
 def test_an_explicit_ssh_wins(monkeypatch):
