@@ -875,22 +875,67 @@ _SOURCE_REFUSED = ("403", "forbidden", "video unavailable", "private video",
                    "not available in your country")
 
 
-def _words_failure_detail(error: Exception) -> str:
+_GPU_BUSY = ("cuda", "out of memory", "cublas", "cudnn", "no kernel image",
+             "device-side assert", "cufft")
+# What _source_media raises when the fetch it fell back to did not produce a
+# file. Authoritative on its own: the disk check can be inconclusive, and
+# discarding a signal the error already gave would be worse than not looking.
+_NO_AUDIO = ("could not obtain audio",)
+
+
+def _audio_is_stored(episode_id: str):
+    """Whether this episode's audio is on disk, or None if that is unknowable.
+
+    Asked rather than assumed. The message used to *assert* the audio was not
+    stored whatever had gone wrong, which is how a CUDA out-of-memory came to
+    recommend a 50 MB download that would have fixed nothing.
+    """
+    try:
+        from quotesource.cut import _find_episode_dir
+        from quotesource.pull import stored_audio
+
+        ep_dir = _find_episode_dir(episode_id)
+        if not ep_dir:
+            return None
+        return stored_audio(ep_dir) is not None
+    except Exception:
+        return None
+
+
+def _words_failure_detail(error: Exception, episode_id: str = "") -> str:
     """Why word timings failed, and what the reader should do about it.
 
-    Two failures produce the same symptom and want opposite responses. If the
-    audio simply has not been fetched, a pull stores it and every later call
-    on that episode is free. If the source refused the download, a pull fails
-    exactly the same way and the answer is to wait.
+    Several failures produce one symptom and want different responses, so the
+    branch that guesses wrong is worse than no advice at all:
 
-    Telling a reader to "just pull it" in the second case sends them into a
-    403 - and the step after a 403 is where someone reaches for cookies or a
-    browser user agent, which trades a decaying per-IP annoyance for an
-    identity permanently attached to bulk downloading. So the message says
-    not to, at the moment it would be tempting.
+      audio not stored     pull it; ~50 MB, and permanent
+      source refused       wait; never authenticate
+      GPU busy / CUDA OOM  wait and retry; costs nothing
+
+    The last one arrived wearing the first one's explanation - the GPU ran out
+    of memory and the reader was told to spend 50 MB on a download that would
+    change nothing, while the actual answer went unmentioned. Same shape as
+    the 403 before it: a real error landing in the stored-audio branch and
+    inheriting its template.
+
+    So the stored-audio claim is now *checked* rather than assumed, and an
+    unrecognised failure says what happened instead of inventing a cause.
     """
     text = str(error) or error.__class__.__name__
     lowered = text.lower()
+
+    if any(marker in lowered for marker in _GPU_BUSY):
+        # Whisper and the embedding model share one GPU, and a semantic search
+        # holds ~3.3 GB until QS_MODEL_IDLE_S (600s) after the last one. So a
+        # burst of searching is the usual reason this window will not run, and
+        # waiting is both the fix and free.
+        return (f"{text}. Word timings need the GPU, and it has no memory free "
+                f"right now - nothing is wrong with the audio or the corpus. "
+                f"Wait and retry; it costs nothing. A recent semantic search "
+                f"may still be holding the embedding model (~3.3 GB), which is "
+                f"released about ten minutes after the last search. `context` "
+                f"works meanwhile: it reads the transcript from disk.")
+
     if any(marker in lowered for marker in _SOURCE_REFUSED):
         headline = (f"{text}. This endpoint needs the episode's audio, and "
                     f"the source refused to serve it - a `qs pull` will fail "
@@ -898,11 +943,19 @@ def _words_failure_detail(error: Exception) -> str:
                     f"cookies or a browser user agent to get past it. "
                     f"`context` still works here: it reads the transcript "
                     f"already on disk.")
-    else:
+    elif (any(m in lowered for m in _NO_AUDIO)
+          or _audio_is_stored(episode_id) is False):
         headline = (f"{text}. This endpoint needs the episode's audio and it "
                     f"is not stored yet; captions alone are not enough. A "
                     f"`qs pull` on this episode fetches and keeps it (~50 MB), "
                     f"after which words and cuts on it cost no network.")
+    else:
+        # The audio is present, or it could not be determined. Either way this
+        # is not the stored-audio case, and saying it is would send the reader
+        # to spend bandwidth on something already there.
+        headline = (f"{text}. Word timings failed for a reason this endpoint "
+                    f"does not recognise, and the episode's audio is not "
+                    f"known to be the problem.")
     # What this does *not* block, which the bare sentence above implies it
     # does. A clip already cut from this episode carries its own per-word
     # timings in the .words.json beside it, so narrowing a beat to a shorter
@@ -948,7 +1001,8 @@ def qs_words(episode_id: str, start: float, end: float, pad: float = 0.0,
         # sailed straight past and reached the browser as a bare 500 reading
         # "the endpoint is broken" - while `context` on the same episode
         # answered perfectly well from the transcript on disk.
-        raise HTTPException(502, _words_failure_detail(e)) from None
+        raise HTTPException(
+            502, _words_failure_detail(e, episode_id)) from None
 
 
 @app.get("/api/qs/context")
@@ -1146,6 +1200,30 @@ def qs_pull(body: dict = Body(...)):
 SERVER_ACTIONS = ("start", "stop", "restart", "status")
 
 
+def _ssh_binary() -> str:
+    """An ssh that can actually authenticate, rather than whichever is first.
+
+    Windows has two, and they do not share credentials. The OpenSSH client in
+    System32 talks to the Windows ssh-agent service; Git for Windows ships its
+    own under usr/bin which does not, and answers "Permission denied
+    (publickey)" for a key the agent is holding. Which one wins is decided by
+    the PATH the app happened to be launched with - a shell difference
+    silently changing whether the server controls work.
+
+    Same reasoning as the `./qs` wrapper picking an interpreter that actually
+    has faster-whisper instead of trusting `python3`. QS_SSH overrides.
+    """
+    explicit = os.environ.get("QS_SSH")
+    if explicit:
+        return explicit
+    if os.name == "nt":
+        system32 = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        candidate = system32 / "System32" / "OpenSSH" / "ssh.exe"
+        if candidate.exists():
+            return str(candidate)
+    return "ssh"
+
+
 def _server_ssh() -> Optional[str]:
     """user@host for the corpus machine, inferred from QS_REMOTE if unset."""
     explicit = (os.environ.get("QS_SERVER_SSH") or "").strip()
@@ -1177,11 +1255,13 @@ def _run_server_action(action: str) -> dict:
     timeout = 90 if action in ("start", "restart") else 45
     try:
         proc = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            [_ssh_binary(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
              target, f"bash {script} {action}"],
             capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
-        raise HTTPException(500, "ssh is not available on this machine") from None
+        raise HTTPException(
+            500, f"ssh is not available on this machine "
+                 f"(tried {_ssh_binary()})") from None
     except subprocess.TimeoutExpired:
         raise HTTPException(504, f"'{action}' timed out talking to {target}") from None
 

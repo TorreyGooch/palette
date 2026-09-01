@@ -200,3 +200,67 @@ def test_ssh_stderr_is_still_preferred_when_there_is_any(ssh):
         main.qs_server_status()
 
     assert "Permission denied (publickey)" in raised.value.detail
+
+
+# ── which ssh, and why it matters ─────────────────────────────────────────────
+
+def test_ssh_is_chosen_rather_than_inherited_from_path(monkeypatch):
+    """Windows has two ssh clients and they do not share credentials.
+
+    The OpenSSH client in System32 talks to the Windows ssh-agent; Git for
+    Windows ships its own under usr/bin which does not, and answers
+    "Permission denied (publickey)" for a key the agent is holding. Which one
+    wins was decided by whatever PATH the app was launched with, so the shell
+    used to start it silently decided whether the server controls worked —
+    and starting it from Git Bash broke them for everyone.
+    """
+    from palette_app import main
+
+    monkeypatch.delenv("QS_SSH", raising=False)
+    monkeypatch.setattr(main.os, "name", "nt")
+    monkeypatch.setenv("SystemRoot", r"C:\Windows")
+    monkeypatch.setattr(main.Path, "exists", lambda self: True)
+
+    assert main._ssh_binary().endswith(r"System32\OpenSSH\ssh.exe")
+
+
+def test_an_explicit_ssh_wins(monkeypatch):
+    from palette_app import main
+
+    monkeypatch.setenv("QS_SSH", "/usr/bin/ssh")
+    assert main._ssh_binary() == "/usr/bin/ssh"
+
+
+def test_without_the_windows_client_it_falls_back_to_path(monkeypatch):
+    from palette_app import main
+
+    monkeypatch.delenv("QS_SSH", raising=False)
+    monkeypatch.setattr(main.os, "name", "posix")
+    assert main._ssh_binary() == "ssh"
+
+
+def test_the_chosen_binary_is_the_one_invoked(ssh, monkeypatch):
+    from palette_app import main
+
+    monkeypatch.setenv("QS_SSH", "/custom/ssh")
+    _, calls = ssh
+    main.qs_server_status()
+    assert calls[-1][0] == "/custom/ssh"
+
+
+def test_a_missing_ssh_names_what_it_looked_for(monkeypatch):
+    """"ssh is not available" gave no way to tell which one was missing."""
+    import subprocess as sp
+
+    from palette_app import main
+
+    monkeypatch.setenv("QS_SSH", "/nowhere/ssh")
+    monkeypatch.setattr(main, "_server_ssh", lambda: "torrey@10.0.0.1")
+
+    def missing(*a, **k):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(sp, "run", missing)
+    with pytest.raises(HTTPException) as raised:
+        main.qs_server_status()
+    assert "/nowhere/ssh" in raised.value.detail

@@ -216,3 +216,85 @@ def test_resplitting_a_beat_really_does_avoid_audio_and_network(library,
     assert narrow["precision"] == "word"
     assert narrow["word_count"] == 3
     assert narrow["duration"] > 0
+
+
+# ── three failures, three answers ─────────────────────────────────────────────
+#
+# They produce one symptom and want different responses, so a branch that
+# guesses wrong is worse than no advice. A CUDA out-of-memory arrived wearing
+# the stored-audio explanation and told the reader to spend 50 MB on a
+# download that would have changed nothing, while the real answer - wait, it
+# is free - went unmentioned. Same shape as the 403 before it.
+
+@pytest.mark.parametrize("message", [
+    "CUDA failed with error out of memory",
+    "cuBLAS init failed: CUBLAS_STATUS_NOT_INITIALIZED",
+    "RuntimeError: CUDA error: out of memory",
+])
+def test_a_busy_gpu_says_wait_not_pull(monkeypatch, message):
+    main = _raising(monkeypatch, RuntimeError(message))
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("N1KHs9hQ1V4", 3908.0, 3945.0)
+
+    detail = raised.value.detail
+    assert "costs nothing" in detail
+    assert "qs pull" not in detail, "a download fixes nothing here"
+    assert "not stored" not in detail, "nothing is known about the audio"
+
+
+def test_a_busy_gpu_names_the_likely_cause(monkeypatch):
+    """Whisper and the embedding model share one GPU; a search holds ~3.3 GB."""
+    main = _raising(monkeypatch, RuntimeError("CUDA out of memory"))
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("EP", 0.0, 1.0)
+
+    detail = raised.value.detail
+    assert "semantic search" in detail
+    assert "ten minutes" in detail
+    assert "context" in detail, "and what still works meanwhile"
+
+
+def test_the_stored_audio_claim_is_checked_not_assumed(monkeypatch):
+    """It used to assert 'not stored yet' whatever had actually gone wrong."""
+    main = _raising(monkeypatch, RuntimeError("something unrecognised"))
+    monkeypatch.setattr(main, "_audio_is_stored", lambda ep: True)
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("EP", 0.0, 1.0)
+
+    detail = raised.value.detail
+    assert "not stored yet" not in detail
+    assert "does not recognise" in detail
+    assert "something unrecognised" in detail, "the real error survives"
+
+
+def test_an_unknown_audio_state_does_not_invent_one(monkeypatch):
+    main = _raising(monkeypatch, RuntimeError("something unrecognised"))
+    monkeypatch.setattr(main, "_audio_is_stored", lambda ep: None)
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("EP", 0.0, 1.0)
+    assert "not stored yet" not in raised.value.detail
+
+
+def test_genuinely_absent_audio_still_recommends_a_pull(monkeypatch):
+    """The case the advice is right for must survive the fix."""
+    main = _raising(monkeypatch,
+                    RuntimeError("could not obtain audio for mO9LUWs5M60"))
+    monkeypatch.setattr(main, "_audio_is_stored", lambda ep: False)
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("mO9LUWs5M60", 0.0, 1.0)
+    assert "qs pull" in raised.value.detail
+
+
+def test_a_refusal_still_outranks_the_audio_check(monkeypatch):
+    """A 403 is about the source, whatever the local disk holds."""
+    main = _raising(monkeypatch, DownloadError("HTTP Error 403: Forbidden"))
+    monkeypatch.setattr(main, "_audio_is_stored", lambda ep: False)
+
+    with pytest.raises(HTTPException) as raised:
+        main.qs_words("EP", 0.0, 1.0)
+    assert "wait, not a retry" in raised.value.detail
