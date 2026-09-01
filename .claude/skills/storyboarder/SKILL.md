@@ -84,7 +84,11 @@ prevents, and it costs seconds on the GPU.
 2. The order reads top to bottom as an argument.
 3. It renders with `missing: []`. Check that field.
 4. Narration beats name a **word range** wherever the quote needs tightening.
-   Word indices survive a re-cut; seconds do not.
+   Word indices are positions in the clip's manifest, so they stay valid
+   across a re-cut but do not keep pointing at the same words — a cut that
+   snaps outward shifts every index and the beat quietly says something else.
+   **After any `recut`, read `beats_drifted` in the result** and re-check the
+   note above each beat it names. Nothing else will tell you.
 
 ## The intent check
 

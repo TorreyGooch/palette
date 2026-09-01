@@ -447,9 +447,10 @@ const Storyboard = {
     const at = this.timelineFor(p.id);
     const who = (n.attribution || {}).person;
     const show = (n.attribution || {}).episode_title;
-    // Word indices rather than seconds: they survive a re-cut of the same
-    // quote, and they mean something to a person — "lobster" to
-    // "antidepressants" rather than 477.45 to 487.15.
+    // Word indices rather than seconds: they mean something to a person —
+    // "lobster" to "antidepressants" rather than 477.45 to 487.15. They stay
+    // valid across a re-cut but do not keep pointing at the same words, which
+    // is what beats_drifted in a recut result exists to report.
     return `
       <div class="sb-narr">
         <div class="sb-narr-time">

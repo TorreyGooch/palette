@@ -766,8 +766,23 @@ copied number would — send a `duration` and it will be ignored. Omit the
 bounds and you get the whole clip; out-of-range or reversed indices are
 clamped rather than refused.
 
-Word indices rather than seconds, because they survive a re-cut of the same
-quote and mean something to a person: *from "lobster" to "antidepressants"*.
+Word indices rather than seconds, because they mean something to a person:
+*from "lobster" to "antidepressants"* rather than 477.45 to 487.15.
+
+**They survive a re-cut in the sense that they stay valid, not in the sense
+that they keep pointing at the same words.** An index is a position in the
+clip's manifest, and `recut` regenerates that manifest: if the new cut snaps
+outward and catches two extra words at the head, every index shifts and the
+beat quietly says something else. Measured on a real board — a beat kept its
+id, its note and its range 1–18, and went from a whole sentence to one ending
+mid-clause on "and it". Nothing downstream can see that: the beat renders, the
+timeline recomputes to a plausible duration, and the note still describes the
+quote it used to be.
+
+So a recut's `replaced` block reports `beats_drifted` — every beat bound to
+that clip whose words changed, with `was` and `now`. **Read it.** It is the
+only warning, deliberately: re-anchoring would rewrite someone's board, and a
+board is a record of decisions rather than an index to be fixed up.
 
 A clip with no manifest still binds — `qs pull` writes no sidecar, only
 `qs cut` does — and comes back as `precision: "clip"` covering the whole file.

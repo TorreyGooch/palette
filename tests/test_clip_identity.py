@@ -313,3 +313,86 @@ def test_an_ordinary_cut_is_forwarded_untouched():
     forwarded = _remote_job_body(body)
 
     assert {k: v for k, v in forwarded.items() if k != "stage"} == body
+
+
+# -- the reference survives; the meaning may not -----------------------------
+
+def write_manifest(library, name, words):
+    (library / "media" / name.replace(".m4a", ".words.json")).write_text(
+        json.dumps({"duration": len(words) * 0.4,
+                    "words": [{"word": w, "start": i * 0.4,
+                               "end": i * 0.4 + 0.35}
+                              for i, w in enumerate(words)]}),
+        encoding="utf-8")
+
+
+SENTENCE = "a lobster is defeated in a dominance battle you can give it "\
+           "antidepressants and it will fight again".split()
+
+
+@pytest.fixture
+def board_beat(staged, api):
+    """A board with one beat bound to the staged clip by word range."""
+    write_manifest(staged, "qs_cut_EP_477450_487150.m4a", SENTENCE)
+    board = api.storyboard_create(body={"name": "Probe"})
+    api.storyboard_update(board["id"], body={"panels": [
+        {"narration": {"item_id": "clip-1", "word_start": 0, "word_end": 12},
+         "note": "the turn"}]})
+    return board
+
+
+def test_a_beat_that_says_the_same_thing_is_not_reported(staged, api,
+                                                         board_beat):
+    before = api._beats_bound_to(staged, "clip-1")
+    after = api._beats_bound_to(staged, "clip-1")
+    assert api._narration_drift(before, after) == []
+
+
+def test_words_shifting_under_a_beat_is_reported(staged, api, board_beat):
+    """The failure that has no other symptom.
+
+    A re-cut that snaps outward catches extra words at the head, so every
+    index shifts. The beat keeps its id, its note and its range, renders
+    cleanly, and says something else.
+    """
+    before = api._beats_bound_to(staged, "clip-1")
+    assert before, "the beat must be found at all"
+
+    # What a recut does: same item, regenerated manifest, different head.
+    write_manifest(staged, "qs_cut_EP_477450_487150.m4a",
+                   ["the", "fact", "that"] + SENTENCE)
+    drift = api._narration_drift(before,
+                                 api._beats_bound_to(staged, "clip-1"))
+
+    assert len(drift) == 1
+    assert drift[0]["was"] != drift[0]["now"]
+    assert drift[0]["was"].startswith("a lobster is defeated")
+    assert drift[0]["now"].startswith("the fact that")
+    assert drift[0]["board"] == "Probe"
+
+
+def test_the_drift_report_names_the_beat_and_its_range(staged, api,
+                                                       board_beat):
+    """Enough to go and look at it, which is the entire point."""
+    before = api._beats_bound_to(staged, "clip-1")
+    write_manifest(staged, "qs_cut_EP_477450_487150.m4a", SENTENCE[2:])
+    drift = api._narration_drift(before,
+                                 api._beats_bound_to(staged, "clip-1"))
+
+    entry = drift[0]
+    assert entry["board_id"] and entry["panel_id"]
+    assert entry["word_start"] == 0 and entry["word_end"] == 12
+    assert entry["word_total_was"] == len(SENTENCE)
+
+
+def test_a_clip_no_beat_speaks_reports_nothing(staged, api):
+    """The case my own verification used, which could not see this at all."""
+    assert api._beats_bound_to(staged, "clip-1") == {}
+
+
+def test_beats_on_other_clips_are_not_swept_up(staged, api, board_beat):
+    from conftest import add_item
+
+    add_item(staged, "other.m4a", "clip-9")
+    found = api._beats_bound_to(staged, "clip-9")
+    assert found == {}

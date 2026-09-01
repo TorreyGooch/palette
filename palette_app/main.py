@@ -1072,6 +1072,67 @@ def _finish_job(job: dict):
     job["finished_at"] = time.time()
 
 
+def _beats_bound_to(root: Path, item_id: str) -> dict:
+    """Every storyboard beat that speaks this clip, and what it says now.
+
+    Word indices are *positions* in the clip's manifest. A re-cut regenerates
+    that manifest, so a beat's range stays valid while pointing at different
+    words - the range survives, the meaning does not. Nothing downstream can
+    see it: the beat still renders, the timeline still recomputes, and the
+    note above it still describes the quote it used to be. That is the same
+    shape as a misaligned cut, fluent and confident and wrong, arriving by a
+    door the alignment guard does not watch.
+
+    Called either side of a replace, which is the one moment both the old and
+    new manifests exist and the drift is computable at all.
+    """
+    from .narration import bind as narration_bind
+    from .storyboard import list_boards, load_board
+
+    lib = load_library(root)
+    clip = _find(lib["items"], item_id)
+    out = {}
+    for summary in list_boards(root):
+        board = load_board(root, summary["id"])
+        if not board:
+            continue
+        for panel in board.get("panels", []):
+            stored = panel.get("narration") or {}
+            if stored.get("item_id") != item_id:
+                continue
+            bound = narration_bind(root / "media", clip,
+                                   stored.get("word_start"),
+                                   stored.get("word_end")) if clip else {}
+            out[panel.get("id")] = {
+                "board": board.get("name"),
+                "board_id": board.get("id"),
+                "panel_id": panel.get("id"),
+                "word_start": stored.get("word_start"),
+                "word_end": stored.get("word_end"),
+                "text": bound.get("text"),
+                "word_total": bound.get("word_total"),
+            }
+    return out
+
+
+def _narration_drift(before: dict, after: dict) -> list:
+    """Beats whose words changed under them, reported so a person can look.
+
+    Not corrected automatically: re-anchoring rewrites someone's board, and a
+    board is a record of decisions rather than an index to be fixed up. What
+    it must not be is silent.
+    """
+    drifted = []
+    for panel_id, was in before.items():
+        now = after.get(panel_id)
+        if not now or was.get("text") == now.get("text"):
+            continue
+        drifted.append({**now, "was": was.get("text"),
+                        "now": now.get("text"),
+                        "word_total_was": was.get("word_total")})
+    return drifted
+
+
 # Keys that mean something only on this side of the bridge.
 #
 # `replace_item` is a *local* library item id. Cut clips are registered here
@@ -1141,8 +1202,11 @@ def _start_remote_job(kind: str, body: dict):
             if replacing:
                 # A correction, not a new clip: the item keeps its id so
                 # every board beat pointing at it survives the edit.
+                before_beats = _beats_bound_to(_root(), replacing)
                 job["replaced"] = _asyncio.run(qs_remote.replace_remote_item(
                     _root(), replacing, finished["item"]))
+                job["replaced"]["beats_drifted"] = _narration_drift(
+                    before_beats, _beats_bound_to(_root(), replacing))
                 job["item"] = _find(load_library(_root())["items"], replacing)
             else:
                 # Palette and person are reapplied here rather than copied
@@ -1443,6 +1507,7 @@ def qs_cut(body: dict = Body(...)):
                 from .library import replace_item_media
 
                 job["stage"] = "replacing"
+                before_beats = _beats_bound_to(_root(), replacing)
                 job["replaced"] = _asyncio.run(replace_item_media(
                     _root(), replacing, res["filename"],
                     manifest=Path(res["filename"]).with_suffix(
@@ -1450,6 +1515,8 @@ def qs_cut(body: dict = Body(...)):
                     attribution=res.get("attribution"),
                     url=(res.get("attribution") or {}).get("source_url_ts"),
                     title=res.get("title")))
+                job["replaced"]["beats_drifted"] = _narration_drift(
+                    before_beats, _beats_bound_to(_root(), replacing))
                 job["item"] = _find(load_library(_root())["items"], replacing)
             else:
                 job["item"] = {"title": res["filename"], **res}
