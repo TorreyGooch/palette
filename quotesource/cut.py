@@ -410,6 +410,29 @@ def _match_quote_region(words: list[dict], want_start: float,
 
 # ── main entry ────────────────────────────────────────────────────────────────
 
+def clip_filename(episode_id: str, start: float, end: float) -> str:
+    """A name that is unique to these exact bounds.
+
+    Truncating to whole seconds meant two cuts a fraction of a second apart
+    shared one name — and ffmpeg writes with -y, so the second silently
+    overwrote the first's audio *and* its word manifest. The old item still
+    pointed at that filename, so a storyboard beat bound to it resolved its
+    words against a manifest that no longer belonged to it: a fluent clip of
+    a different sentence in the right voice, which is the exact failure the
+    alignment guard exists to prevent.
+
+    Sub-second adjustment is not an edge case, it is the normal correction —
+    `qs words` hands you boundaries like 477.45 against 477.60, and the whole
+    workflow is "end just before a pause". Milliseconds make the collision
+    impossible rather than unlikely.
+
+    Existing clips keep their names: the library stores the filename, so old
+    items go on resolving and nothing needs migrating.
+    """
+    return (f"qs_cut_{episode_id}_{int(round(start * 1000))}"
+            f"_{int(round(end * 1000))}.m4a")
+
+
 def cut_quote(episode_id: str, start: float, end: float,
               palette_name: str | None = None, person: str | None = None,
               model_size: str | None = None, stage: bool = True,
@@ -536,7 +559,7 @@ def cut_quote(episode_id: str, start: float, end: float,
         raise RuntimeError("palette library not configured — run the app once")
     ensure_library(lib_root)
 
-    filename = f"qs_cut_{episode_id}_{int(abs_start)}_{int(abs_end)}.m4a"
+    filename = clip_filename(episode_id, abs_start, abs_end)
     dest = lib_root / "media" / filename
     _progress("cutting clip")
     cmd = ["ffmpeg", "-y", "-ss", str(abs_start + audio_offset), "-i", str(src),

@@ -180,7 +180,7 @@ Errors: `{"error": msg}` on stderr, exit 1 (2 for usage).
 **The `/api/qs/*` endpoints on :7861 are the primary interface, not a
 mirror.** They cover `status`, `search` (semantic, or keyword with
 `mode=grep`), `words`, `context`, `pull`, `cut`,
-`warm`, `discard` and `server`, work identically whether the corpus is local
+`recut`, `warm`, `discard` and `server`, work identically whether the corpus is local
 or remote, and — unlike the CLI — put the resulting clip in *this* machine's
 library. Reach for the CLI only for corpus maintenance: `ingest`, `index`,
 `embed`, `transcribe`.
@@ -297,10 +297,21 @@ passing it to `ingest` overrides for one run. Accepts `1800`, `30m`,
   "ianka" a few words later. **`levin_yt` is the only source that is mostly
   clean.** Assume `raw` and check.
 - After any `qs ingest`, run `qs index` then `qs embed` (both incremental).
-- **Clip filenames truncate their bounds to whole seconds**, so two cuts a
-  fraction of a second apart collide on one name and several library items
-  can share a file. Deleting an item only removes the media when it was the
-  last reference. Don't assume filename identifies an item.
+- **Correcting a cut keeps the item.** `POST /api/qs/recut {item_id,
+  start, end}` re-cuts to new bounds and swaps the media, manifest and
+  attribution into the *same* item, so every storyboard beat pointing at it
+  survives along with the note written under it. Episode and person come from
+  the item's own attribution, not the caller — it is the same quote, moved.
+  Tags and palettes are untouched. The old file is removed only when nothing
+  else refers to it, and the job's `replaced` block reports the old and new
+  ranges so a correction is auditable.
+- Clip filenames carry their bounds **in milliseconds**
+  (`qs_cut_<ep>_477450_487150.m4a`). They used to truncate to whole seconds,
+  so a sub-second correction — the normal kind — overwrote the previous
+  clip's audio *and* its word manifest while the old item went on pointing at
+  the filename. Several items can still legitimately share a file, so
+  deleting one removes the media only when it was the last reference, and a
+  filename still does not identify an item.
 - Search is ~2 s warm and grows with the corpus, since it is brute-force
   cosine over every vector. `--source` cuts the work roughly in proportion.
   The first search after a start also loads the model (~2 s extra), which is

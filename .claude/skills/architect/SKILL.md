@@ -115,12 +115,10 @@ exist yet, and is the interesting edge.
 
 1. `extract_clips` records no provenance: carved clips do not know their source
    item or time range, so they cannot be re-derived and storyboard source
-   fields must be typed by hand.
-2. Correcting a cut mints a **new item id**, orphaning every reference to the
-   old one. Non-destructive means identity survives the edit.
-3. Clip filenames truncate bounds to whole seconds, so a sub-second adjustment
-   collides with the file it is replacing.
-4. `S -> G` is half a bridge, on purpose. A beat carries a `video_prompt` and
+   fields must be typed by hand. **This is now the odd one out** — a `qs cut`
+   clip can be corrected in place and re-derived from its attribution, and a
+   carved clip still cannot.
+2. `S -> G` is half a bridge, on purpose. A beat carries a `video_prompt` and
    it now survives into the rendered PNG, so a board can be handed over. What
    does not exist is the return: nothing brings an asset back attached to the
    beat, prompt, model and seed that produced it, so a re-roll is not

@@ -249,7 +249,9 @@ def record_request(kind: str = "fetch"):
     with library_lock(root):
         ledger = _read_ledger()
         ledger.append(datetime.now())
-        payload = json.dumps([w.isoformat(timespec="seconds") for w in ledger])
+        # Full precision: the spacing is arithmetic on these, and rounding
+        # to the second puts up to a second of error into every gap.
+        payload = json.dumps([w.isoformat() for w in ledger])
         tmp = root / (BUDGET_FILE + ".tmp")
         tmp.write_text(payload, encoding="utf-8")
         os.replace(tmp, root / BUDGET_FILE)

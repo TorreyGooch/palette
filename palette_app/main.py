@@ -41,6 +41,7 @@ CAPABILITIES = [
     "discard",     # /api/qs/discard removes a handed-over clip
     "api_only",    # PALETTE_API_ONLY serves an explanation instead of the UI
     "job_boot_id",  # job ids identify the process, so a restart is legible
+    "recut",       # /api/qs/recut corrects a clip's bounds in place
     "words",       # /api/qs/words exposes word timings for picking boundaries
 ]
 
@@ -1064,13 +1065,21 @@ def _start_remote_job(kind: str, body: dict):
                 raise RuntimeError(finished["error"])
 
             job["stage"] = "downloading"
-            # Palette and person are reapplied here rather than copied from
-            # the remote: its palette ids belong to its own library.
-            job["item"] = _asyncio.run(qs_remote.adopt_remote_item(
-                _root(), finished["item"],
-                palette_name=body.get("palette") or None,
-                person=body.get("person") or None,
-                kind=kind))
+            replacing = body.get("replace_item")
+            if replacing:
+                # A correction, not a new clip: the item keeps its id so
+                # every board beat pointing at it survives the edit.
+                job["replaced"] = _asyncio.run(qs_remote.replace_remote_item(
+                    _root(), replacing, finished["item"]))
+                job["item"] = _find(load_library(_root())["items"], replacing)
+            else:
+                # Palette and person are reapplied here rather than copied
+                # from the remote: its palette ids belong to its own library.
+                job["item"] = _asyncio.run(qs_remote.adopt_remote_item(
+                    _root(), finished["item"],
+                    palette_name=body.get("palette") or None,
+                    person=body.get("person") or None,
+                    kind=kind))
 
             # Only once the clip is safely here. Failing to clean up leaves
             # a stray file; cleaning up too early loses it outright.
@@ -1260,6 +1269,47 @@ def qs_pull_status(job_id: str):
     raise HTTPException(404, "unknown job")
 
 
+@app.post("/api/qs/recut")
+def qs_recut(body: dict = Body(...)):
+    """Re-cut an existing clip to new bounds, keeping its identity.
+
+    The correction that used to be impossible without losing something.
+    Cutting the same quote again mints a new item, so every storyboard beat
+    pointing at the old one is left behind along with the note written under
+    it — and until clip filenames carried milliseconds, the new audio also
+    overwrote the old file, so the abandoned item silently started playing a
+    different sentence.
+
+    Episode and person come from the item's own attribution rather than the
+    caller: this is the same quote, moved, and asking for them again is an
+    invitation to cite it as something it is not.
+    """
+    root = _root()
+    item_id = (body.get("item_id") or "").strip()
+    item = _find(load_library(root)["items"], item_id) if item_id else None
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    attribution = item.get("attribution") or {}
+    episode_id = attribution.get("episode_id")
+    if not episode_id:
+        raise HTTPException(
+            400, "this item has no attribution, so there is no episode to "
+                 "re-cut from. Only clips made by `qs cut` can be re-cut.")
+
+    try:
+        start, end = float(body["start"]), float(body["end"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "start and end (seconds) are required") from None
+    if end <= start:
+        raise HTTPException(400, "end must be after start")
+
+    return qs_cut({"episode_id": episode_id, "start": start, "end": end,
+                   "person": attribution.get("person"),
+                   "model": body.get("model") or None,
+                   "replace_item": item_id})
+
+
 @app.post("/api/qs/cut")
 def qs_cut(body: dict = Body(...)):
     """Word-accurate cut. Same job/polling contract as /api/qs/pull."""
@@ -1272,6 +1322,7 @@ def qs_cut(body: dict = Body(...)):
 
     def _run_job():
         try:
+            replacing = body.get("replace_item")
             res = cut_quote(
                 body["episode_id"],
                 float(body["start"]), float(body["end"]),
@@ -1279,10 +1330,28 @@ def qs_cut(body: dict = Body(...)):
                 person=body.get("person") or None,
                 model_size=body.get("model") or None,
                 progress_cb=lambda stage: job.__setitem__("stage", stage),
-                stage=bool(body.get("stage", True)),
+                # A correction produces the clip but must not register a
+                # second item for it - the whole point is that the existing
+                # one survives.
+                stage=False if replacing else bool(body.get("stage", True)),
                 outbox=body.get("outbox") or None,
             )
-            job["item"] = {"title": res["filename"], **res}
+            if replacing:
+                import asyncio as _asyncio
+
+                from .library import replace_item_media
+
+                job["stage"] = "replacing"
+                job["replaced"] = _asyncio.run(replace_item_media(
+                    _root(), replacing, res["filename"],
+                    manifest=Path(res["filename"]).with_suffix(
+                        ".words.json").name,
+                    attribution=res.get("attribution"),
+                    url=(res.get("attribution") or {}).get("source_url_ts"),
+                    title=res.get("title")))
+                job["item"] = _find(load_library(_root())["items"], replacing)
+            else:
+                job["item"] = {"title": res["filename"], **res}
             job["stage"] = "done"
         except Exception as e:
             job["error"] = str(e)

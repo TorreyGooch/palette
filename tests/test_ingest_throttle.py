@@ -271,7 +271,7 @@ def test_the_budgets_pacing_is_not_a_metronome(monkeypatch, tmp_path):
     """
     slept = []
     monkeypatch.setenv("QUOTESOURCE_DATA", str(tmp_path))
-    monkeypatch.setenv("QS_MAX_PER_HOUR", "3600")     # one a second
+    monkeypatch.setenv("QS_MAX_PER_HOUR", "60")       # one a minute
     monkeypatch.setattr(ingest.time, "sleep", lambda s: slept.append(s))
     monkeypatch.setattr(ingest, "_enumerate_youtube",
                         lambda url, stype: [{"episode_id": f"e{i}", "url": "u",

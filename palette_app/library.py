@@ -271,6 +271,101 @@ def media_type(filename: str) -> str:
     return "other"
 
 
+async def replace_item_media(root: Path, item_id: str, new_filename: str, *,
+                             manifest: Optional[str] = None,
+                             attribution: Optional[dict] = None,
+                             url: Optional[str] = None,
+                             title: Optional[str] = None) -> dict:
+    """Point an existing item at new media, keeping its identity.
+
+    Correcting a cut used to mint a *new* item, which orphaned every
+    reference to the old one — a storyboard beat, and the reasoning written
+    under it. Non-destructive does not mean never overwriting a file; it
+    means identity survives the edit, so a board keeps pointing at the beat
+    it was pointing at and the note stays attached to the quote it explains.
+
+    Tags, palette membership and the item id are untouched: they are the
+    curation, and a timing correction is not a reason to lose it.
+
+    The old media only goes when nothing else refers to it — several items
+    can legitimately share one file — and it is checked under the same lock
+    that does the swap, so nothing can start referring to it in between.
+    """
+    from .api.media import audio_thumbnail, image_thumbnail, probe, video_thumbnail
+
+    path = root / "media" / new_filename
+    if not path.exists():
+        raise FileNotFoundError(f"{new_filename} is not in the library's media")
+
+    duration = fps = None
+    mtype = media_type(new_filename)
+    if mtype in ("video", "audio"):
+        info = await probe(path)
+        duration, fps = info["duration"], info["fps"]
+
+    # Keyed by item id, so the thumbnail has to be rebuilt in place rather
+    # than arriving with a new name.
+    thumb = root / "thumbnails" / f"{item_id}.jpg"
+    if mtype == "video":
+        await video_thumbnail(path, thumb, (duration or 1) / 2)
+    elif mtype == "image":
+        image_thumbnail(path, thumb)
+    elif mtype == "audio":
+        await audio_thumbnail(path, thumb)
+
+    with library_lock(root):
+        lib = load_library(root)
+        item = next((i for i in lib["items"] if i["id"] == item_id), None)
+        if item is None:
+            raise KeyError(f"no item {item_id}")
+
+        old_filename = item.get("filename")
+        old_manifest = item.get("manifest")
+        old_attribution = item.get("attribution") or {}
+
+        item["filename"] = new_filename
+        item["type"] = mtype
+        item["duration"] = duration
+        item["fps"] = fps
+        if manifest is not None:
+            item["manifest"] = manifest
+        if attribution is not None:
+            item["attribution"] = attribution
+        if url is not None:
+            item["url"] = url
+        if title is not None:
+            item["title"] = title
+
+        # Only what nothing else points at, and only once the swap is
+        # recorded — an interrupted replace should leave a stray file rather
+        # than an item pointing at one that is gone.
+        orphaned = []
+        for name in (old_filename, old_manifest):
+            if not name or name == new_filename or name == manifest:
+                continue
+            if any(i.get("filename") == name or i.get("manifest") == name
+                   for i in lib["items"]):
+                continue
+            orphaned.append(name)
+        save_library(root, lib)
+
+    removed = []
+    for name in orphaned:
+        target = root / "media" / name
+        if target.exists():
+            target.unlink()
+            removed.append(name)
+
+    return {
+        "item_id": item_id,
+        "old_filename": old_filename,
+        "new_filename": new_filename,
+        "old_range": old_attribution.get("range"),
+        "new_range": (attribution or {}).get("range"),
+        "removed": removed,
+    }
+
+
 async def register_media_file(root: Path, filename: str, title: str,
                               url: Optional[str] = None) -> dict:
     """Probe, thumbnail, and add a media file (already in root/media) to the

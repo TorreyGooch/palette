@@ -185,6 +185,39 @@ def manifest_name(filename: str, remote_item: dict = None) -> str:
     return Path(filename).with_suffix(".words.json").name
 
 
+async def replace_remote_item(root: Path, item_id: str,
+                              remote_item: dict) -> dict:
+    """Swap a remote re-cut into an item that already exists here.
+
+    Same fetch as adopt; a different destination. Attribution travels
+    verbatim for the same reason it does there — it is what makes the clip
+    citable, and rebuilding it locally could let it drift from what the
+    server recorded. Tags and palettes are not touched at all: they are this
+    library's curation, and the remote has no opinion about them.
+    """
+    from .library import replace_item_media
+
+    filename = remote_item.get("filename")
+    if not filename:
+        raise RemoteError("remote job returned no filename", 502)
+
+    dest = root / "media" / filename
+    if not fetch_file(filename, dest):
+        raise RemoteError(f"remote produced {filename} but will not serve it", 502)
+
+    sidecar = manifest_name(filename, remote_item)
+    if not fetch_file(sidecar, root / "media" / sidecar):
+        raise RemoteError(f"re-cut produced no manifest ({sidecar}) — the clip "
+                          f"cannot drive word-level beats without it", 502)
+
+    return await replace_item_media(
+        root, item_id, filename,
+        manifest=sidecar,
+        attribution=remote_item.get("attribution"),
+        url=remote_item.get("url"),
+        title=remote_item.get("title"))
+
+
 async def adopt_remote_item(root: Path, remote_item: dict,
                             palette_name: str = None, person: str = None,
                             kind: str = "cut") -> dict:
