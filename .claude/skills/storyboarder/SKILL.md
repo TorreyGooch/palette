@@ -101,6 +101,15 @@ than spending the pull to find out. It says nothing about whether a fetch
 both sides of it by index. **Do not search the word list by spelling** — a word
 that occurs twice in the window makes that ambiguous.
 
+**Check `duplicate_of` before you cut.** It names the same conversation under
+another source id, or is null. Search otherwise hands you one moment twice
+under two attributions and nothing says they are one thing — a Vervaeke grep
+returned exactly that and there was no way to tell. Every member of a group
+points at the group's lowest episode id and the canonical one holds null, so
+two hits are the same talk when either names the other, or both name the same
+third. Cutting from both would ship one moment twice under two speakers'
+credits.
+
 **Check `matches_cut_window` before you cut from a view.** `words` is a preview
 of the cut, and by default now uses the cut's own window and audio offset, so
 what you choose from is what the manifest will be built from. It did not

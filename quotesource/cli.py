@@ -93,6 +93,43 @@ def _guest_source_id(person: str) -> str:
     return f"guest_{slug}" if slug else "guest"
 
 
+def cmd_reject(args):
+    """Candidates looked at and deliberately not added.
+
+    The judgement is the expensive part of guest sourcing and nothing recorded
+    it, so the same URLs were re-evaluated - and two searches for "James
+    Shapiro" returned Denis Noble talks and intelligent-design repackagings,
+    neither detectable from a title. `guest add` reads this and warns.
+    """
+    from .ingest import youtube_id
+    from . import rejections
+
+    if args.action == "list":
+        _out(rejections.list_rejections(), args.pretty)
+        return
+
+    if not args.urls:
+        _fail(f"reject {args.action} needs at least one URL or video id")
+
+    ids = []
+    for url in args.urls:
+        video_id = youtube_id(url)
+        if not video_id:
+            _fail(f"not a YouTube video URL or id: {url!r}")
+        ids.append(video_id)
+
+    if args.action == "remove":
+        _out([{"video_id": v, "removed": rejections.unreject(v)} for v in ids],
+             args.pretty)
+        return
+
+    if not (args.reason or "").strip():
+        _fail("reject add needs --reason; a rejection with no reason tells "
+              "the next person only that somebody said no")
+    _out([rejections.reject(v, args.reason, args.person or "") for v in ids],
+         args.pretty)
+
+
 def cmd_guest(args):
     """Individually added episodes, grouped by the person worth quoting.
 
@@ -444,7 +481,7 @@ def cmd_status(args):
 # even with no corpus, so they are not listed.
 _NEEDS_CORPUS = {
     "episodes", "index", "embed", "grep", "search", "context",
-    "episode-info", "transcribe", "pull", "words", "cut",
+    "episode-info", "transcribe", "pull", "words", "cut", "reject",
 }
 # `ingest` and `guest` are deliberately absent: both *build* a corpus, so
 # refusing to run them when there is not one yet would forbid the first step.
@@ -549,6 +586,15 @@ def main(argv=None):
     p.add_argument("--notes")
     p.add_argument("--quiet", action="store_true", help="suppress per-episode logging")
     p.set_defaults(func=cmd_guest)
+
+    p = sub.add_parser("reject", parents=[shared],
+                       help="record a candidate you looked at and declined")
+    p.add_argument("action", choices=["add", "list", "remove"])
+    p.add_argument("urls", nargs="*",
+                   help="YouTube video URLs (or bare ids)")
+    p.add_argument("--reason", help="why not — required for add, and the point")
+    p.add_argument("--person", help="who this was being considered for")
+    p.set_defaults(func=cmd_reject)
 
     p = sub.add_parser("ingest", help="fetch episode metadata and captions", parents=[shared])
     p.add_argument("source_id", nargs="?")

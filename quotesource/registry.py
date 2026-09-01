@@ -98,6 +98,36 @@ def add_source(source_id: str, name: str, type_: str, url: str,
     return entry
 
 
+def record_min_duration_evidence(source_id: str, evidence: dict) -> bool:
+    """Store what the channel looked like when a min_duration was applied.
+
+    `min_duration: 1800` is a number with no argument attached, and the next
+    person cannot tell a deliberate threshold from an oversight. Prose would
+    not fix that - "dropped the trailer" still cannot be checked. What cannot
+    be reconstructed later is the *evidence*: 51 items enumerated, one below
+    the line, and it was a 171-second trailer.
+
+    This is not a derive-don't-store violation, and the distinction matters.
+    Re-enumerating gives today's channel, not the one the decision was made
+    against; the observation is historical, so recomputing it answers a
+    different question. If someone re-enumerates in a year and forty items now
+    fall under the threshold, the number has gone wrong for what the channel
+    became - and only the snapshot makes that visible.
+
+    Written at ingest rather than at `sources add`, because add writes YAML
+    and never touches the network: gathering this there would mean spending
+    the request budget to describe a source nobody has fetched yet. Ingest
+    already enumerates and already applies the filter.
+    """
+    sources = _load_yaml()
+    for entry in sources:
+        if entry.get("id") == source_id:
+            entry["min_duration_evidence"] = evidence
+            _save_yaml(sources)
+            return True
+    return False
+
+
 def remove_source(source_id: str) -> bool:
     sources = _load_yaml()
     kept = [s for s in sources if s.get("id") != source_id]

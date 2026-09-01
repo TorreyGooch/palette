@@ -449,13 +449,21 @@ def add_episode(url: str, source: dict, quiet: bool = False) -> dict:
     if not episode_id:
         raise ValueError(f"not a YouTube video URL: {url!r}")
 
+    # Looked up before anything is fetched, so the warning survives a failed
+    # fetch and costs nothing. It warns and never refuses: a rejection is a
+    # judgement, and the same video can legitimately be wanted for a different
+    # person than the one it was declined for.
+    from .rejections import rejection_for
+    rejected = rejection_for(episode_id)
+
     ep_dir = episode_dir(source["id"], episode_id)
     existing = load_metadata(ep_dir)
     if existing and existing.get("status") != "captions_pending":
         return {"source": source["id"], "episode_id": episode_id,
                 "title": existing.get("title"),
                 "status": existing.get("status"),
-                "already_had_it": True, "rate_limited": False}
+                "already_had_it": True, "rate_limited": False,
+                "rejected": rejected}
 
     entry = {"episode_id": episode_id,
              "url": f"https://www.youtube.com/watch?v={episode_id}",
@@ -468,7 +476,8 @@ def add_episode(url: str, source: dict, quiet: bool = False) -> dict:
            "upload_date": meta.get("upload_date"),
            "duration": meta.get("duration"),
            "status": meta.get("status"),
-           "already_had_it": False, "rate_limited": False}
+           "already_had_it": False, "rate_limited": False,
+           "rejected": rejected}
     # Reported at add time, while fixing it is still one `guest remove` away
     # rather than a re-transcription later.
     twin = find_duplicate(source, episode_id, meta.get("title"),
@@ -834,15 +843,34 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
     # the same words in the corpus twice. Unknown durations are kept, because
     # silently dropping a real episode is worse than admitting a clip.
     too_short = 0
+    evidence = None
     if min_duration:
-        kept = []
+        kept, excluded_durations = [], []
         for entry in entries:
             duration = entry.get("duration")
             if duration is not None and duration < min_duration:
                 too_short += 1
+                excluded_durations.append(duration)
                 continue
             kept.append(entry)
         entries = kept
+        kept_durations = [e["duration"] for e in entries
+                          if e.get("duration") is not None]
+        # The threshold is recorded beside the counts because a --min-duration
+        # passed for one run overrides the source's stored value, and evidence
+        # measured against a different number than the one on file would
+        # otherwise read as though it justified it.
+        evidence = {
+            "at": datetime.now().strftime("%Y-%m-%d"),
+            "threshold": min_duration,
+            "enumerated": enumerated,
+            "excluded": too_short,
+            "longest_excluded_s": (round(max(excluded_durations))
+                                   if excluded_durations else None),
+            "shortest_kept_s": (round(min(kept_durations))
+                                if kept_durations else None),
+        }
+        registry.record_min_duration_evidence(source["id"], evidence)
         _log(quiet, f"[{source['id']}] {too_short} under {min_duration}s skipped, "
                     f"{len(entries)} to consider")
 
@@ -850,6 +878,7 @@ def ingest_source(source: dict, limit: int | None = None, quiet: bool = False,
         "source": source["id"],
         "enumerated": enumerated,
         "min_duration": min_duration,
+        "min_duration_evidence": evidence,
         "too_short": too_short,
         "new": 0, "retried": 0, "skipped": 0, "failed": 0,
         "episodes": [],

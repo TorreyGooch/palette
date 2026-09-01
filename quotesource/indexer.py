@@ -144,6 +144,124 @@ def _ensure_schema(con: sqlite3.Connection):
     if "caption_quality" not in columns:
         con.execute("ALTER TABLE episodes ADD COLUMN caption_quality TEXT")
         con.commit()
+    if "duplicate_of" not in columns:
+        con.execute("ALTER TABLE episodes ADD COLUMN duplicate_of TEXT")
+        con.commit()
+
+
+# How alike two titles must read before the same conversation is suspected,
+# and how far their durations may then disagree. Both measured, not guessed:
+# across thoughtforms vs levin_yt, 108 pairs matched on title at 0.85, of
+# which 102 agreed on duration within 90s and 6 did not - and those 6 were
+# genuinely different material, including one running 3247s on RSS against
+# 1339s on YouTube. A title-only matcher would have discarded real content as
+# duplicate, which is the expensive direction: a missed duplicate costs some
+# GPU, a false one hides an episode nobody can then find.
+DUPLICATE_TITLE_RATIO = 0.85
+DUPLICATE_DURATION_S = 90.0
+
+
+def _duplicate_pairs(rows) -> list[tuple[str, str]]:
+    """Episodes in *different* sources that are the same conversation.
+
+    rows: (episode_id, source_id, title, duration), duration may be None.
+
+    Same-source repeats are a different problem with a different fix - a
+    channel posting clips beside full episodes, handled by --min-duration at
+    ingest. This is the cross-source case: one talk arriving under two source
+    ids, which makes search return one moment twice under two attributions
+    and nothing say they are one thing.
+
+    An episode of unknown duration is never matched. The duration check is
+    what stops a title matcher throwing away real material, so without it
+    there is nothing to confirm the guess with.
+    """
+    import difflib
+    import re
+
+    from .feedaudio import _norm_title
+
+    # Every number in the title, as a multiset. "Ep. 30" and "Ep. 33" are
+    # different lectures and one digit barely moves a similarity ratio - the
+    # whole of vervaeke_amc is numbered that way, so without this the corpus
+    # would call fifty distinct lectures one conversation.
+    #
+    # feedaudio.series_number already guards the same hazard for audio
+    # linking, but it only matches a *trailing* number ("discussion 4"), and
+    # these titles carry theirs at the front. It is left alone rather than
+    # widened, because it serves a different caller whose behaviour is tuned
+    # and tested against real pairings. Comparing all numbers is stricter than
+    # comparing one, and strict is the cheap direction here: a missed
+    # duplicate costs some GPU, a false one hides an episode nobody can find.
+    def numbers(text):
+        return tuple(sorted(re.findall(r"\d+", text or "")))
+
+    usable = [(eid, sid, _norm_title(title), numbers(title), duration)
+              for eid, sid, title, duration in rows
+              if title and duration is not None]
+    # Sorted by duration so the scan can stop early: anything further down the
+    # list is further away in duration, and duration is the cheap test.
+    usable.sort(key=lambda r: r[4])
+
+    pairs = []
+    for i, (eid, sid, title, digits, duration) in enumerate(usable):
+        for other in usable[i + 1:]:
+            o_eid, o_sid, o_title, o_digits, o_duration = other
+            if o_duration - duration > DUPLICATE_DURATION_S:
+                break
+            if o_sid == sid or digits != o_digits:
+                continue
+            ratio = difflib.SequenceMatcher(None, title, o_title).ratio()
+            if ratio >= DUPLICATE_TITLE_RATIO:
+                pairs.append((eid, o_eid))
+    return pairs
+
+
+def link_duplicates(con: sqlite3.Connection) -> dict:
+    """Recompute `duplicate_of` for the whole index.
+
+    Recomputed rather than updated: it is derived from the episode table, and
+    adding one episode can make a duplicate of something indexed months ago,
+    so an incremental pass would leave stale links. Stale is worse than absent
+    here - a link that lies says two different talks are one.
+
+    Every member of a group points at the group's lowest episode_id, and that
+    canonical one holds NULL. So two hits are the same conversation when
+    either names the other, or both name the same third.
+    """
+    rows = con.execute(
+        "SELECT episode_id, source_id, title, duration FROM episodes").fetchall()
+
+    pairs = _duplicate_pairs(rows)
+    parent: dict[str, str] = {}
+
+    def find(x):
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent[x], parent[x])
+            x = parent[x]
+        return x
+
+    for a, b in pairs:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            # Lowest id wins, so the canonical member is stable across runs
+            # rather than depending on the order rows came back in.
+            hi, lo = max(ra, rb), min(ra, rb)
+            parent[hi] = lo
+
+    groups: dict[str, str] = {}
+    for episode_id in {e for pair in pairs for e in pair}:
+        canonical = find(episode_id)
+        if canonical != episode_id:
+            groups[episode_id] = canonical
+
+    con.execute("UPDATE episodes SET duplicate_of = NULL "
+                "WHERE duplicate_of IS NOT NULL")
+    con.executemany("UPDATE episodes SET duplicate_of = ? WHERE episode_id = ?",
+                    [(canonical, eid) for eid, canonical in groups.items()])
+    con.commit()
+    return {"duplicates": len(groups),
+            "groups": len(set(groups.values()))}
 
 
 def chunk_segments(segments: list[dict]) -> list[dict]:
@@ -263,6 +381,10 @@ def build_index(rebuild: bool = False, quiet: bool = True) -> dict:
         forget_episode(con, episode_id)
         stats["removed"] += 1
     con.commit()
+
+    # After the episode table is settled, never per-episode: one new episode
+    # can make a duplicate of something indexed long ago.
+    stats["duplicates"] = link_duplicates(con)["duplicates"]
 
     total = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     eps = con.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]

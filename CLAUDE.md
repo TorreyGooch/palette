@@ -151,6 +151,7 @@ overrides the search.
 | command | purpose |
 |---|---|
 | `qs sources list\|add\|remove` | registry (`sources.yaml` at the data root, hand-editable) |
+| `qs reject add\|list\|remove <url>... --reason "…" [--person X]` | record a candidate you looked at and declined. `guest add` reads it and **warns, never refuses** |
 | `qs ingest <source-id> [--limit N] [--min-duration 30m]` / `--all` | fetch episode metadata + captions; idempotent, throttled, resumable |
 | `qs guest add <url>... --person X` / `qs guest list` | add single episodes by URL, grouped by person |
 | `qs guest remove <ep-id>... [--yes]` | take one episode back out. **Dry by default** — reports what it would delete; `--yes` applies |
@@ -172,7 +173,27 @@ source `people` lists and episode title/description), `--after/--before
 YYYY-MM-DD`, `--limit N`.
 
 Hit shape: `{episode_id, source_id, start, end, text, score, episode_title,
-upload_date, url, url_ts, caption_quality, audio_stored}`. **`audio_stored`
+upload_date, url, url_ts, caption_quality, audio_stored, duplicate_of}`.
+
+**`duplicate_of`** names the same conversation under another source id, or
+is null. Search otherwise returns one moment twice under two attributions
+with nothing saying they are one thing — which happened to both roles on the
+same day. Every member of a group points at the group's lowest episode id and
+that canonical one holds null, so two hits are the same talk when either names
+the other or both name the same third.
+
+It is computed at index time, across *different* sources only (a channel
+posting clips beside full episodes is `--min-duration`'s job), and recomputed
+whole on every `qs index` — a stale link saying two different talks are one is
+worse than no link. Matching needs the title to be ≥0.85 similar, the numbers
+in the two titles to be identical ("Ep. 30" and "Ep. 33" are different
+lectures) **and** the durations to agree within 90 s. That last is not
+optional: of 108 real title matches, 6 disagreed on duration and all 6 were
+genuinely different material — one at 3247 s against 1339 s. An episode of
+unknown duration is never matched, because there is nothing to confirm the
+guess with.
+
+**`audio_stored`
 says whether cutting this quote needs the network**: `true` means the episode's
 audio is already on disk and the cut costs nothing; `false` means the first cut
 fetches the whole episode (~50 MB) and may be refused. `null` means the
@@ -258,6 +279,34 @@ of a source whose `people` list names someone as that person's, so
 quotes for FTS5 phrase match). If it misses (caption wording drift), fall
 back to `qs search` with the phrase — then verify wording via `qs context`
 before quoting anywhere.
+
+**A threshold records the evidence behind it.** `min_duration: 1800` is a
+number with no argument attached, and the next person cannot tell a measured
+choice from an oversight. So an ingest that applies one writes what it saw
+back to `sources.yaml`:
+
+```yaml
+min_duration: 1800
+min_duration_evidence:
+  at: 2026-09-01
+  threshold: 1800        # what it was measured against, which a one-run
+  enumerated: 51         #   --min-duration override makes differ from above
+  excluded: 1
+  longest_excluded_s: 171
+  shortest_kept_s: 3396
+```
+
+That reads as "51 items, one below the line, and it was a 171-second trailer",
+and it is checkable. It is written at **ingest**, not at `sources add` — add
+writes YAML and never touches the network, and gathering this there would mean
+spending the request budget to describe a source nobody has fetched. It is
+refreshed on every ingest, so if forty items later fall under a threshold that
+once excluded one, the number has gone wrong for what the channel became and
+the snapshot is what makes that visible.
+
+Not a derive-don't-store violation: re-enumerating gives *today's* channel,
+not the one the decision was made against, so recomputing answers a different
+question.
 
 **Filtering out clip re-uploads.** Channels that post excerpts alongside
 full episodes (Lex Fridman: 855 videos, only 560 over 30 min) would put the

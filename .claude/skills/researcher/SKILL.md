@@ -128,6 +128,42 @@ Operating rules that still matter:
   range requests happily and have no rate limit worth the name. YouTube is for
   captions, which are a few KB; the bytes should come from the feed.
 
+## Three things the corpus now remembers for you
+
+**Duplicates are detected at index time.** `qs index` compares every episode's
+title against episodes in *other* sources and writes `duplicate_of`, which then
+rides on every search hit. Title ≥0.85 similar, identical numbers in both
+titles, **and** durations within 90 s — all three, because of 108 real title
+matches 6 disagreed on duration and all 6 were different material. Recomputed
+whole each run, since one new episode can duplicate something indexed months
+ago. Check it before spending whisper on a backlog: 108 of 186 thoughtforms
+episodes duplicate `levin_yt`, which is ~9 GPU-hours of transcription that did
+not need doing.
+
+**A threshold records its own evidence.** An ingest that applies a
+`min_duration` writes back what it saw — enumerated, excluded, the longest
+excluded and the shortest kept, plus the threshold it was measured against.
+Refreshed every run, so a number that has gone wrong for what a channel became
+is visible rather than inferred.
+
+**Rejections are recorded and `guest add` reads them.**
+
+```bash
+qs reject add https://youtu.be/<id> --reason "Denis Noble, not Shapiro"     --person "James A. Shapiro"
+qs reject list
+qs reject remove <id>
+```
+
+Keyed by video id at the data root, not per source — a rejection is a fact
+about a video, and the same result may legitimately be wanted for a different
+person later. `guest add` reports it and **proceeds anyway**: a judgement can
+be wrong, and refusing would make it a wall rather than a note. A reason is
+required, because a rejection without one tells the next person only that
+somebody said no.
+
+**Name people in full.** Ben Shapiro and James A. Shapiro are not the same
+project, and a surname in a brief already cost a blocking question.
+
 ## Escalation — stop rather than proceed
 
 - **HTTP 429.** The run stops itself on the first one and starts a cooldown
@@ -156,17 +192,19 @@ Operating rules that still matter:
 
 ## The strategic part of this role
 
-The corpus currently reflects what was easy to ingest, not what the work is
-about. Peterson is over half of it. Of the project's five priority figures,
-only Michael Levin has a source at all.
+The corpus reflects what was easy to ingest more than what the work is about.
+Peterson is still over half of it. All five priority figures now have a source
+— **ask `qs status` for the current shape rather than trusting any figure
+written here**, since this paragraph is exactly the kind that goes stale
+between sessions.
 
 Two structural facts worth carrying:
 
-- **Vervaeke's *Awakening from the Meaning Crisis*** is ~50 long-form YouTube
-  episodes with captions — exactly the shape this pipeline handles best. It is
-  close to a one-command gap.
-- **Guests are handled one episode at a time.** Nesse, Shapiro and Dennett
-  appear scattered across shows, not as channels. Use
-  `qs guest add <url>... --person "Name"` — it groups them under a per-person
-  source so `--person` finds them later. **Never pull a whole channel to catch
-  one appearance.**
+- **Guests are handled one episode at a time.** Randolph M. Nesse, James A.
+  Shapiro and Daniel Dennett appear scattered across shows, not as channels.
+  Use `qs guest add <url>... --person "Name"` — it groups them under a
+  per-person source so `--person` finds them later. **Never pull a whole
+  channel to catch one appearance.**
+- **Names in full, always.** Ben Shapiro had seven episodes already in the
+  corpus and James A. Shapiro had none; they are not remotely the same
+  project, and a surname alone already cost a blocking question.

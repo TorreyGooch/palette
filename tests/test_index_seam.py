@@ -187,9 +187,9 @@ def corpus(tmp_path, monkeypatch):
     return tmp_path
 
 
-def row(episode_id="EP1", source_id="src"):
+def row(episode_id="EP1", source_id="src", duplicate_of=None):
     return (episode_id, source_id, 1.0, 2.0, "text", 0.8,
-            "Title", "20240101", "https://y/watch?v=EP1", "clean")
+            "Title", "20240101", "https://y/watch?v=EP1", "clean", duplicate_of)
 
 
 def test_a_hit_whose_audio_is_on_disk_says_stored(corpus):
@@ -255,5 +255,6 @@ def test_the_new_fields_are_advertised_as_capabilities():
     """
     from palette_app import main
 
-    for capability in ("word_index", "hit_audio", "clip_words"):
+    for capability in ("word_index", "hit_audio", "clip_words",
+                       "words_match_cut", "hit_duplicates"):
         assert capability in main.CAPABILITIES

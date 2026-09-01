@@ -3,7 +3,7 @@ Semantic search (qs search) arrives with the embedding layer.
 
 Hit shape (shared by grep and search):
 {episode_id, source_id, start, end, text, score,
- episode_title, upload_date, url, url_ts, caption_quality, audio_stored}
+ episode_title, upload_date, url, url_ts, caption_quality, audio_stored, duplicate_of}
 
 `caption_quality` is `clean`, `raw` or `unknown` - a prompt to verify, not a
 verdict. `raw` means the transcript reads as machine output and the wording
@@ -91,7 +91,7 @@ def _audio_stored(source_id: str, episode_id: str):
 
 def _hit(row) -> dict:
     (episode_id, source_id, start, end, text, score,
-     title, upload_date, url, quality) = row
+     title, upload_date, url, quality, duplicate_of) = row
     return {
         "episode_id": episode_id,
         "source_id": source_id,
@@ -108,6 +108,10 @@ def _hit(row) -> dict:
         "caption_quality": quality or "unknown",
         # Whether cutting it needs the network.
         "audio_stored": _audio_stored(source_id, episode_id),
+        # The same conversation under another source id, or None. Search
+        # otherwise returns one moment twice under two attributions with
+        # nothing saying they are one thing.
+        "duplicate_of": duplicate_of,
     }
 
 
@@ -120,7 +124,7 @@ def grep(terms: str, source=None, person=None, after=None, before=None,
     sql = f"""
         SELECT c.episode_id, e.source_id, c.start, c.end, c.text,
                -bm25(chunks_fts) AS score,
-               e.title, e.upload_date, e.url, e.caption_quality
+               e.title, e.upload_date, e.url, e.caption_quality, e.duplicate_of
         FROM chunks_fts
         JOIN chunks c ON c.id = chunks_fts.rowid
         JOIN episodes e ON e.episode_id = c.episode_id
