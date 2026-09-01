@@ -1072,6 +1072,23 @@ def _finish_job(job: dict):
     job["finished_at"] = time.time()
 
 
+# Keys that mean something only on this side of the bridge.
+#
+# `replace_item` is a *local* library item id. Cut clips are registered here
+# and the server is told to discard its copy, so the remote library is the one
+# place guaranteed never to contain it. Forwarding it made the server attempt
+# the swap against its own library and fail with "no item <id>" — after the
+# whisper pass, so a recut in the bridged configuration could never succeed
+# and cost GPU time to find that out.
+LOCAL_ONLY_JOB_KEYS = ("replace_item",)
+
+
+def _remote_job_body(body: dict) -> dict:
+    """What of a job request the remote should actually be told."""
+    return {k: v for k, v in body.items()
+            if k not in LOCAL_ONLY_JOB_KEYS} | {"stage": False}
+
+
 def _start_remote_job(kind: str, body: dict):
     """Mirror a remote pull/cut as a local job.
 
@@ -1097,7 +1114,8 @@ def _start_remote_job(kind: str, body: dict):
                 job["warning"] = (
                     "remote is too old to skip staging; it will keep its own "
                     "copy of this clip")
-            started = qs_remote.post(f"/api/qs/{kind}", {**body, "stage": False})
+            started = qs_remote.post(f"/api/qs/{kind}",
+                                     _remote_job_body(body))
             remote_id = started["job_id"]
             job["stage"] = "remote:queued"
 

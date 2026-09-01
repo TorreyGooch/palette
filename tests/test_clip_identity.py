@@ -271,3 +271,45 @@ def test_recut_is_advertised_as_a_capability():
     from palette_app import main
 
     assert "recut" in main.CAPABILITIES
+
+
+# -- the bridge, where recut actually runs -----------------------------------
+
+def test_the_local_item_id_is_not_forwarded_to_the_remote():
+    """Recut could never work in the configuration it is documented for.
+
+    Cut clips are registered on the desktop and the server is told to discard
+    its copy, so the remote library is the one place guaranteed never to hold
+    the item. Forwarding `replace_item` made the server try the swap against
+    its own library and fail with "no item <id>" — after the whisper pass, so
+    the failure cost GPU time as well as being certain.
+    """
+    from palette_app.main import _remote_job_body
+
+    forwarded = _remote_job_body({
+        "episode_id": "PWasTAtR6Ns", "start": 477.3, "end": 484.7,
+        "person": "Jordan Peterson", "replace_item": "66e51d87"})
+
+    assert "replace_item" not in forwarded
+    assert forwarded["episode_id"] == "PWasTAtR6Ns"
+    assert forwarded["person"] == "Jordan Peterson"
+
+
+def test_the_remote_is_still_told_not_to_stage():
+    """It does the cutting; this library owns the result."""
+    from palette_app.main import _remote_job_body
+
+    assert _remote_job_body({"episode_id": "EP"})["stage"] is False
+    # Even if a caller asked for staging, the remote must not keep a copy.
+    assert _remote_job_body({"episode_id": "EP", "stage": True})["stage"] is False
+
+
+def test_an_ordinary_cut_is_forwarded_untouched():
+    """Stripping must not quietly drop anything the remote needs."""
+    from palette_app.main import _remote_job_body
+
+    body = {"episode_id": "EP", "start": 1.0, "end": 2.0, "model": "small",
+            "palette": "Narration", "person": "X", "outbox": "~/out"}
+    forwarded = _remote_job_body(body)
+
+    assert {k: v for k, v in forwarded.items() if k != "stage"} == body
