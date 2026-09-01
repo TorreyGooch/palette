@@ -277,3 +277,28 @@ def test_an_app_already_serving_the_current_build_is_left_alone(
     assert result.returncode == 0, result.stderr
     assert f"already serving {current}" in result.stderr
     assert "restarting" not in result.stderr
+
+
+def test_a_version_check_that_fails_still_restarts(deployment, tmp_path):
+    """`set -e` plus a failing command substitution aborted after the pull.
+
+    running_version is a curl piped into python. Under `set -eo pipefail` a
+    failing pipeline inside `serving=$(...)` ends the script - after the
+    fast-forward, before the restart - leaving the stale app that update
+    exists to prevent, and reporting nothing. Seen on the real server when
+    the box was short of memory and curl timed out.
+
+    Here the URL file points nowhere, so the check cannot succeed; the update
+    must still reach its restart decision.
+    """
+    author, server = deployment
+    publish(author, "v2\n")
+    url_file = tmp_path / "unreachable"
+    url_file.write_text("http://127.0.0.1:9\n")      # discard port: nothing there
+
+    result = run_update(server, PALETTE_URL_FILE=str(url_file))
+
+    assert result.returncode == 0, result.stderr
+    assert "updated" in result.stderr
+    assert "nothing to restart" in result.stderr, (
+        "it must reach the restart decision, not die at the version check")

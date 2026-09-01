@@ -129,8 +129,13 @@ update_app() {
     return 0
   fi
 
+  # `|| true` is load-bearing under `set -eo pipefail`: running_version is a
+  # curl piped into python, and a failing pipeline in a command substitution
+  # would abort the script *after* the pull - leaving exactly the stale app
+  # this function exists to prevent, and saying nothing about it. Seen for
+  # real when the box was under memory pressure and curl timed out.
   local serving
-  serving=$(running_version)
+  serving=$(running_version || true)
   if [ -n "$serving" ] && [ "$serving" = "$after" ]; then
     echo "app already serving $after" >&2
     return 0
