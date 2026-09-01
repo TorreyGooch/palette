@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -88,11 +89,41 @@ Open palette on your own machine instead — it queries this one over
 <p><a href="/api/qs/status">/api/qs/status</a></p>"""
 
 
+_ASSET_REF = re.compile(r'(?P<attr>(?:src|href)=")(?P<path>/static/[^"?]+)"')
+
+
+def _stamp_assets(html: str) -> str:
+    """Give every static reference a version taken from the file's mtime.
+
+    Without this the browser keeps whatever it cached, so a shipped frontend
+    change stays invisible to the person it was built for until they happen to
+    hard-reload - and it discredits work that did ship. It cost exactly that:
+    a board rendering "image unavailable" on beats whose narration UI had been
+    live for hours, and a reasonable conclusion that the feature was missing.
+
+    mtime rather than the build version, because it changes when the file
+    changes rather than when a commit happens, so an uncommitted edit busts
+    the cache too.
+    """
+    static_root = TOOL_DIR / "frontend" / "static"
+
+    def stamp(match):
+        rel = match.group("path")[len("/static/"):]
+        try:
+            version = int((static_root / rel).stat().st_mtime)
+        except OSError:
+            return match.group(0)        # not ours to stamp; leave it alone
+        return f'{match.group("attr")}{match.group("path")}?v={version}"'
+
+    return _ASSET_REF.sub(stamp, html)
+
+
 @app.get("/")
 def serve_frontend():
     if API_ONLY:
         return HTMLResponse(API_ONLY_PAGE)
-    return FileResponse(str(TOOL_DIR / "frontend" / "index.html"))
+    index = TOOL_DIR / "frontend" / "index.html"
+    return HTMLResponse(_stamp_assets(index.read_text(encoding="utf-8")))
 
 
 def _root() -> Path:

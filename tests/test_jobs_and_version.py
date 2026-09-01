@@ -3,6 +3,7 @@
 Both are consequences of the split: jobs used to die with a short-lived
 process, and there used to be only one copy of the code.
 """
+import os
 import time
 
 import pytest
@@ -179,3 +180,66 @@ def test_no_remote_means_no_capabilities(monkeypatch):
 
     monkeypatch.delenv("QS_REMOTE", raising=False)
     assert qs_remote.remote_capabilities() == set()
+
+
+# ── the page has to be able to change ─────────────────────────────────────────
+
+def test_static_references_are_versioned():
+    """A shipped frontend change was invisible until a hard reload.
+
+    The browser kept the cached script, so a board rendered "image
+    unavailable" on beats whose narration UI had been live for hours - and
+    the reasonable conclusion was that the feature had never shipped. Every
+    frontend change had that property.
+    """
+    from palette_app.main import _stamp_assets
+
+    html = _stamp_assets('<script src="/static/js/storyboard.js"></script>')
+    assert 'src="/static/js/storyboard.js?v=' in html
+
+
+def test_the_stylesheet_is_versioned_too():
+    from palette_app.main import _stamp_assets
+
+    html = _stamp_assets('<link rel="stylesheet" href="/static/css/style.css">')
+    assert 'href="/static/css/style.css?v=' in html
+
+
+def test_the_version_follows_the_file(tmp_path, monkeypatch):
+    """mtime, not the build sha: an uncommitted edit must bust it as well."""
+    import palette_app.main as main
+
+    static = tmp_path / "frontend" / "static" / "js"
+    static.mkdir(parents=True)
+    asset = static / "a.js"
+    asset.write_text("one")
+    monkeypatch.setattr(main, "TOOL_DIR", tmp_path)
+
+    tag = '<script src="/static/js/a.js"></script>'
+    first = main._stamp_assets(tag)
+    os.utime(asset, (0, 1_000_000))
+    second = main._stamp_assets(tag)
+
+    assert first != second
+
+
+def test_an_asset_that_is_not_there_is_left_alone():
+    """A reference we cannot stamp must not be mangled into a broken URL."""
+    from palette_app.main import _stamp_assets
+
+    tag = '<script src="/static/js/does-not-exist.js"></script>'
+    assert _stamp_assets(tag) == tag
+
+
+def test_an_already_versioned_reference_is_not_double_stamped():
+    from palette_app.main import _stamp_assets
+
+    tag = '<script src="/static/js/app.js?v=1"></script>'
+    assert _stamp_assets(tag) == tag
+
+
+def test_external_urls_are_untouched():
+    from palette_app.main import _stamp_assets
+
+    tag = '<a href="https://example.com/static/js/x.js">x</a>'
+    assert _stamp_assets(tag) == tag
