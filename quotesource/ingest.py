@@ -708,10 +708,26 @@ def _enumerate_youtube(url: str, source_type: str) -> list[dict]:
     return out
 
 
-# Preference order among English tracks. Exact "en" first because it is what
-# a creator uploading one track uses; the regional variants are what YouTube
-# offers when there is no plain one.
-CAPTION_LANGS = ("en", "en-orig", "en-US", "en-GB")
+# A creator who uploads one track uses plain "en", so that is the best manual
+# guess. For *automatic* captions the order flips: YouTube stores one
+# machine transcript in the spoken language and generates every other
+# language from it on demand, marking the original with "-orig". A bare "en"
+# among the automatic tracks of a non-English video is therefore a
+# translation waiting to be generated, not a file waiting to be served.
+MANUAL_LANGS = ("en", "en-US", "en-GB", "en-orig")
+AUTO_LANGS = ("en-orig", "en", "en-US", "en-GB")
+
+
+def _is_translation(entries) -> bool:
+    """Whether every form of this track is generated on demand.
+
+    YouTube's timedtext endpoint takes the target language as `tlang`, so a
+    URL carrying it is a request to translate rather than to fetch. That is an
+    exact marker, not a heuristic - and it is the difference between a stored
+    file and a server-side job, which is what gets rationed.
+    """
+    forms = entries or []
+    return bool(forms) and all("tlang=" in (f.get("url") or "") for f in forms)
 
 
 def pick_caption_track(info: dict):
@@ -721,23 +737,28 @@ def pick_caption_track(info: dict):
     otherwise - and asking for eight to use one is the difference between a
     polite client and a noisy one.
 
-    It matters more than the arithmetic suggests. `writeautomaticsub` with a
-    language the video does not natively carry asks YouTube to **auto-translate
-    on demand**, which is a heavier, server-side operation than handing over a
-    stored track. A video with no English captions at all used to draw eight
-    such requests and produce nothing; now it draws none.
+    Returning None matters as much as returning a track. A video whose only
+    English captions are auto-translations has nothing we can fetch: asking
+    produces a 429 rather than a file, and one such video refused every run
+    for a fortnight. Saying so here means it is classified as needing whisper
+    instead of retried forever.
     """
     manual = info.get("subtitles") or {}
     auto = info.get("automatic_captions") or {}
-    for available, is_auto in ((manual, False), (auto, True)):
-        for lang in CAPTION_LANGS:
-            if lang in available:
-                return lang, is_auto
-        # A track we did not name, e.g. "en-GB-oxendict". Still English, and
-        # still one request, so it beats falling through to auto-translation.
-        for lang in sorted(available):
-            if lang.startswith("en"):
-                return lang, is_auto
+
+    for lang in MANUAL_LANGS:
+        if lang in manual:
+            return lang, False
+    for lang in sorted(manual):
+        if lang.startswith("en"):
+            return lang, False
+
+    for lang in AUTO_LANGS:
+        if lang in auto and not _is_translation(auto[lang]):
+            return lang, True
+    for lang in sorted(auto):
+        if lang.startswith("en") and not _is_translation(auto[lang]):
+            return lang, True
     return None
 
 
@@ -775,26 +796,10 @@ def _fetch_youtube_episode(source: dict, entry: dict, quiet: bool) -> dict:
         info = ydl.extract_info(entry["url"], download=False)
     requests_made = 1
 
-    # Phase 2: fetch exactly the one track we will use, if there is one.
     chosen = pick_caption_track(info)
-    if chosen:
-        lang, is_auto = chosen
-        with yt_dlp.YoutubeDL({
-            **base,
-            "writesubtitles": not is_auto,
-            "writeautomaticsub": is_auto,
-            "subtitleslangs": [lang],
-            "subtitlesformat": "json3/vtt/best",
-            "outtmpl": str(ep_dir / "captions.raw"),
-        }) as ydl:
-            ydl.extract_info(entry["url"], download=True)
-        requests_made += 2      # the re-extraction, and the track itself
-
-    manual_subs = info.get("subtitles") or {}
-    has_manual = any(k.startswith("en") for k in manual_subs)
-    auto_subs = info.get("automatic_captions") or {}
-    has_auto = any(k.startswith("en") for k in auto_subs)
-
+    # `caption_kind` says what we can actually get, not what is listed. A
+    # video offering English only as an auto-translation lists English and
+    # serves none, and calling that "auto" describes a track nobody can fetch.
     meta = {
         "episode_id": entry["episode_id"],
         "source_id": source["id"],
@@ -805,13 +810,41 @@ def _fetch_youtube_episode(source: dict, entry: dict, quiet: bool) -> dict:
         "url": info.get("webpage_url") or entry["url"],
         "uploader": info.get("uploader"),
         "ingested_at": datetime.now().isoformat(),
-        "caption_kind": "manual" if has_manual else ("auto" if has_auto else "none"),
+        "caption_kind": "none" if not chosen else ("auto" if chosen[1]
+                                                   else "manual"),
         "status": "needs_transcription",
     }
 
+    # Phase 2: fetch exactly the one track we will use, if there is one.
+    if chosen:
+        lang, is_auto = chosen
+        try:
+            with yt_dlp.YoutubeDL({
+                **base,
+                "writesubtitles": not is_auto,
+                "writeautomaticsub": is_auto,
+                "subtitleslangs": [lang],
+                "subtitlesformat": "json3/vtt/best",
+                "outtmpl": str(ep_dir / "captions.raw"),
+            }) as ydl:
+                ydl.extract_info(entry["url"], download=True)
+            requests_made += 2  # the re-extraction, and the track itself
+        except Exception:
+            # Phase 1 already established what this episode *is*. Throwing
+            # that away because the caption fetch failed is what left episode
+            # directories empty for weeks, so every later run met the same
+            # video as though it had never been seen - and met it in the same
+            # early position, where its refusal ended the run.
+            requests_made += 1
+            meta["status"] = "captions_pending"
+            _write_metadata(ep_dir, meta)
+            record_request("fetch", requests_made - 1)
+            raise
+
     raw_files = list(ep_dir.glob("captions.raw*"))
     if raw_files:
-        transcript_source = "youtube_manual" if has_manual else "youtube_auto"
+        transcript_source = ("youtube_auto" if chosen and chosen[1]
+                             else "youtube_manual")
         t = normalize_captions(ep_dir, entry["episode_id"], source["id"], transcript_source)
         if t:
             meta["status"] = "captions"
@@ -819,12 +852,16 @@ def _fetch_youtube_episode(source: dict, entry: dict, quiet: bool) -> dict:
         else:
             meta["status"] = "captions_pending"
             _log(quiet, f"{entry['episode_id']}  caption parse failed, will retry")
-    elif has_manual or has_auto:
-        # captions exist upstream but fetch produced nothing -> transient
+    elif chosen:
+        # A track we could name did not arrive. That is transient, so retry.
         meta["status"] = "captions_pending"
         _log(quiet, f"{entry['episode_id']}  captions listed but not fetched, will retry")
     else:
-        _log(quiet, f"{entry['episode_id']}  no captions; queued for whisper")
+        # Nothing fetchable: no English at all, or English only as an
+        # on-demand translation. Either way asking again produces a refusal
+        # rather than a file, so this is whisper's job and not a pending
+        # caption fetch. It stays `needs_transcription` and is never retried.
+        _log(quiet, f"{entry['episode_id']}  no fetchable captions; queued for whisper")
 
     _write_metadata(ep_dir, meta)
     # After the write, never before: this is accounting for the caller, not a

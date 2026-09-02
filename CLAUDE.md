@@ -508,6 +508,27 @@ beyond the arithmetic: `writeautomaticsub` for a language a video does not
 natively carry is a request for an **on-demand auto-translation**, which is a
 heavier server-side operation than handing over a stored track.
 
+**A translation is not a track we can fetch, and is now recognised as such.**
+YouTube stores one machine transcript in the spoken language and generates
+every other language from it on request, so a bare `en` among a non-English
+video's *automatic* captions is a job waiting to be run, not a file waiting to
+be served. The timedtext endpoint takes the target language as `tlang`, so a
+URL carrying it is an exact marker rather than a guess. Automatic tracks
+therefore prefer the `-orig` variant and skip translations; manual tracks are
+uploaded files and keep plain `en` first.
+
+A video whose only English is translated now resolves to **no fetchable
+track**, which means it is queued for whisper as `needs_transcription` rather
+than left `captions_pending` and retried forever. One real episode
+(`JkKUelM6K8w`, a levin_yt talk) refused every run for a fortnight this way.
+
+**A caption failure no longer discards the episode.** Phase 1 has already
+established the title, duration and url; losing all of it because the caption
+fetch was refused left directories empty, so every later run met the video as
+though it had never been seen — and met it in the same early position, where
+its refusal ended the run before anything else was fetched. The metadata is
+written before the error is re-raised.
+
 **`pull` and `qs transcribe` are rationed too, and were not.** A pull downloads
 a whole episode (~50 MB, ~2.5 GB for video) and `transcribe` downloads audio in
 batches; neither spent anything from the budget and neither checked the

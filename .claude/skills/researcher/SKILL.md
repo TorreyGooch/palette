@@ -130,6 +130,13 @@ Operating rules that still matter:
   then fetch the one we use) and a video with no English captions costs 1
   rather than eight fruitless auto-translate requests. If a run feels slower
   than you remember, that is the meter finally being honest.
+- **A video whose English exists only as an auto-translation is now queued
+  for whisper, not retried.** YouTube generates those on demand and answers a
+  request for one with a refusal rather than a file, so asking again never
+  helps. Such an episode resolves to `needs_transcription` and the ingest loop
+  skips it — one of them (`JkKUelM6K8w`) had been ending `levin_yt` runs for a
+  fortnight. A caption fetch that fails also now keeps the metadata phase 1
+  established, so a refused episode stops looking unseen to the next run.
 - **`pull` and `transcribe` spend from it now, and obey the cooldown.**
   Neither did. A whisper backfill could download episode after episode at full
   speed during an active standoff, which made "we stay stopped" untrue. RSS

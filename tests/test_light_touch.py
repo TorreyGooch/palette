@@ -233,3 +233,188 @@ def test_a_cooldown_does_not_stop_a_podcast_download(corpus, monkeypatch):
     transcribe.download_audio(ep, quiet=True)
 
     assert reached == [["https://cdn.libsyn.com/a.mp3"]]
+
+
+# -- an on-demand translation is not a track we can fetch --------------------
+
+def tracks(*langs, translated=()):
+    """Caption entries as yt-dlp reports them.
+
+    YouTube's timedtext endpoint takes the target language as `tlang`, so a
+    URL carrying it is a request to *generate* rather than to fetch.
+    """
+    out = {}
+    for lang in langs:
+        url = (f"https://youtube.com/api/timedtext?lang=hi&tlang={lang}"
+               if lang in translated
+               else f"https://youtube.com/api/timedtext?lang={lang}")
+        out[lang] = [{"ext": "json3", "url": url}]
+    return out
+
+
+def test_an_automatic_track_prefers_the_stored_original():
+    """YouTube stores one machine transcript and generates the rest from it.
+
+    A bare "en" among the automatic tracks of a non-English video is a
+    translation waiting to be made; "-orig" is the file that already exists.
+    """
+    info = {"subtitles": {},
+            "automatic_captions": tracks("en", "en-orig", translated=("en",))}
+
+    assert ingest.pick_caption_track(info) == ("en-orig", True)
+
+
+def test_a_video_offering_english_only_as_a_translation_asks_for_nothing():
+    """The real case: one video refused every run for a fortnight.
+
+    It lists English, serves none, and answers 429 to the request that would
+    generate it. Returning None here is what stops it being retried forever.
+    """
+    info = {"subtitles": {},
+            "automatic_captions": tracks("hi", "en", "fr", translated=("en", "fr"))}
+
+    assert ingest.pick_caption_track(info) is None
+
+
+def test_a_genuine_automatic_english_track_is_still_used():
+    """The guard must not cost us the ordinary case."""
+    info = {"subtitles": {}, "automatic_captions": tracks("en", "fr",
+                                                          translated=("fr",))}
+
+    assert ingest.pick_caption_track(info) == ("en", True)
+
+
+def test_a_manual_track_is_never_a_translation_and_keeps_plain_en_first():
+    """Uploaded tracks are files, so the ordering that suits them is unchanged."""
+    info = {"subtitles": tracks("en", "en-orig"), "automatic_captions": {}}
+
+    assert ingest.pick_caption_track(info) == ("en", False)
+
+
+def test_a_translated_manual_track_is_still_preferred_over_no_track():
+    """`subtitles` are uploaded files; nothing there is generated on demand."""
+    info = {"subtitles": tracks("en", translated=("en",)),
+            "automatic_captions": {}}
+
+    assert ingest.pick_caption_track(info) == ("en", False)
+
+
+# -- a caption failure must not discard what phase 1 established -------------
+
+@pytest.fixture
+def fake_ytdlp(monkeypatch):
+    """A yt-dlp whose second phase can be made to fail."""
+    import sys
+    import types
+
+    state = {"phase2_raises": None, "info": {}, "calls": 0}
+
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            state["calls"] += 1
+            if download:
+                if state["phase2_raises"]:
+                    raise state["phase2_raises"]
+                return state["info"]
+            return state["info"]
+
+    module = types.ModuleType("yt_dlp")
+    module.YoutubeDL = FakeYDL
+    monkeypatch.setitem(sys.modules, "yt_dlp", module)
+    return state
+
+
+def fetch(corpus, fake, quiet=True):
+    from quotesource import registry
+
+    source = registry.add_source("s", "S", "youtube_channel", "https://x")
+    return ingest._fetch_youtube_episode(
+        source, {"episode_id": "e1", "url": "https://youtu.be/e1",
+                 "title": "t", "duration": 60}, quiet)
+
+
+def stored(corpus):
+    import json
+
+    path = ingest.episode_dir("s", "e1") / "metadata.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def test_a_refused_caption_fetch_still_records_the_episode(corpus, fake_ytdlp):
+    """The bug behind a directory that sat empty for a fortnight.
+
+    Phase 1 already established the title, duration and url. Losing all of it
+    because the caption fetch was refused meant every later run met the video
+    as though it had never been seen — and met it in the same early position,
+    where its refusal ended the run before anything else was fetched.
+    """
+    fake_ytdlp["info"] = {"title": "GRN Inference", "duration": 3072.0,
+                          "subtitles": {},
+                          "automatic_captions": tracks("en")}
+    fake_ytdlp["phase2_raises"] = RuntimeError("HTTP Error 429")
+
+    with pytest.raises(RuntimeError):
+        fetch(corpus, fake_ytdlp)
+
+    meta = stored(corpus)
+    assert meta is not None, "the episode must not vanish"
+    assert meta["title"] == "GRN Inference" and meta["duration"] == 3072.0
+    assert meta["status"] == "captions_pending"
+
+
+def test_a_video_whose_english_is_only_translated_is_queued_for_whisper(
+        corpus, fake_ytdlp):
+    """Not `captions_pending`, which would retry it forever.
+
+    Nothing here is fetchable: asking produces a refusal rather than a file.
+    That is whisper's job, and the ingest loop skips any episode whose status
+    is not `captions_pending`, so it stops meeting this one at all.
+    """
+    fake_ytdlp["info"] = {
+        "title": "GRN Inference", "duration": 3072.0, "subtitles": {},
+        "automatic_captions": tracks("hi", "en", translated=("en",))}
+
+    meta = fetch(corpus, fake_ytdlp)
+
+    assert meta["status"] == "needs_transcription"
+    assert meta["caption_kind"] == "none"
+    assert fake_ytdlp["calls"] == 1, "no caption request was ever sent"
+
+
+def test_that_episode_is_then_skipped_by_a_later_run(corpus, fake_ytdlp,
+                                                      monkeypatch):
+    """The end of the story: it no longer costs a request or ends a run."""
+    fake_ytdlp["info"] = {
+        "title": "GRN Inference", "duration": 3072.0, "subtitles": {},
+        "automatic_captions": tracks("hi", "en", translated=("en",))}
+    fetch(corpus, fake_ytdlp)
+
+    monkeypatch.setattr(ingest.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(ingest, "_enumerate_youtube",
+                        lambda *a, **k: [{"episode_id": "e1", "url": "u",
+                                          "title": "t", "duration": 3072}])
+    from quotesource import registry
+    result = ingest.ingest_source(registry.get_source("s"), quiet=True)
+
+    assert result["skipped"] == 1 and result["failed"] == 0
+    assert result["stopped"] is None
+
+
+def test_a_normal_fetch_is_unaffected(corpus, fake_ytdlp):
+    """The guard must not cost the ordinary path."""
+    fake_ytdlp["info"] = {"title": "Ordinary", "duration": 100.0,
+                          "subtitles": tracks("en"), "automatic_captions": {}}
+
+    meta = fetch(corpus, fake_ytdlp)
+
+    assert meta["caption_kind"] == "manual"
+    assert meta["_requests"] == 3
