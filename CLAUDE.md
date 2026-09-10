@@ -71,8 +71,11 @@ Or press **Start** on the Quotes page — same endpoint. The card shows what
 it costs: app RAM, free machine memory, VRAM, GPU load.
 
 **What it actually costs**, because the two figures are far apart: **~63 MB
-idle**, but **~3.3 GB after a search** — the embedding model plus one pass
-over the vectors. That is released about 10 minutes after the last search
+idle**, but **~5.8 GB after a search** (measured 2026-09-10 at 458 k chunks;
+it read ~3.3 GB when this was first written and the corpus was smaller) — the
+embedding model plus one pass over the vectors. **The second number tracks the
+corpus and will keep drifting**, so read it off `/api/qs/server` rather than
+off this page. It is released about 10 minutes after the last search
 (`QS_MODEL_IDLE_S`), so an idle server is cheap and a busy one is not. Stop
 it outright before a long generation run if you want the memory back now.
 
@@ -1124,11 +1127,37 @@ fills a picker faster than anything else here and most are rejected on sight,
 but "actually the second one was better" is real, so they are kept out of the
 way rather than deleted.
 
-**One card, three tenants.** ComfyUI, the embedding model (~3.3 GB, released
-about ten minutes after the last search) and whisper share one 12 GB GPU.
-Nothing squats permanently, so most of the time nothing collides — but the
-natural rhythm is the colliding one, because you find a quote and then want to
-picture it. A generate reports `vram` and, below 25% free, a `warning` saying
-what is holding the card. It is **reported, never enforced**: stopping the
-corpus server to free memory would kill a search mid-thought, possibly in a
-session that never learns why.
+**One card, three tenants, and one of them squats.** ComfyUI, the embedding
+model and whisper share one 12 GB GPU. Two of the three let go by themselves:
+the embedding model is released about ten minutes after the last search,
+whisper after its window. **ComfyUI is not one of them** — it keeps its
+checkpoint resident once loaded and does not give it back. Measured 2026-09-10,
+21 hours after the last generation with nothing queued: 10,292 MB of 12,288
+held by one process, 16% of the card free.
+
+That corrects the claim that used to be here, which said nothing squatted
+permanently. It does not, however, mean searches start failing: measured on
+the same nearly-full card, a semantic search loaded its model into the
+remaining ~1.6 GB and returned in 6.2 s. **The squat is real and the collision
+was not** — the second was assumed here for a while on the strength of the
+first, and one measurement removed it. Check `gpu_used_mb` on
+`/api/qs/server` before blaming the card for anything.
+
+A generate reports `vram` and, below 25% free, a `warning` naming what is
+holding it. It is **reported, never enforced**, in both directions: stopping
+the corpus server to free memory would kill a search mid-thought in a session
+that never learns why, and unloading ComfyUI's models under a generation run
+is the same rudeness pointed the other way. Freeing the card is a decision
+with a person behind it.
+
+**The first search after a reboot is slow for a reason that is not the GPU.**
+The embedding model is fetched by `fastembed`, which caches to
+**`/tmp/fastembed_cache`** — and `/tmp` does not survive a reboot. So the
+first search on a freshly booted machine re-downloads ~1.3 GB from the
+HuggingFace Hub. Measured: 2 m 07 s, during which the caller got no progress
+and finally a bare `Internal Server Error`, which reads as a broken corpus
+rather than a cold cache. Every later search that day is warm and fast.
+
+If a first search hangs for minutes, that is what is happening; `tail
+~/palette-app.log` on the server shows `Fetching 5 files` while it does. Known
+and not yet fixed — pointing the cache somewhere durable would end it.
