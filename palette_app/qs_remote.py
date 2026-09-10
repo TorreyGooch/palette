@@ -102,6 +102,32 @@ def post(path: str, body: dict, timeout: float = None):
     return _request("POST", path, body=body, timeout=timeout)
 
 
+def get_bytes(path: str, params: dict = None, timeout: float = None) -> bytes:
+    """Fetch a binary body from the remote, undecoded.
+
+    `_request` decodes as UTF-8 and parses JSON, which is right for every
+    other call and destroys a PNG. Generated references have to arrive
+    byte-for-byte: ComfyUI writes the prompt and the whole graph into the
+    file's text chunks, and that is the only record of how the image was made.
+    """
+    base = remote_base()
+    if not base:
+        raise RemoteError("QS_REMOTE is not set", 500)
+    url = f"{base}{path}"
+    if params:
+        clean = {k: v for k, v in params.items() if v is not None}
+        if clean:
+            url += "?" + urllib.parse.urlencode(clean)
+    try:
+        with urllib.request.urlopen(url, timeout=timeout or 180) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:400]
+        raise RemoteError(f"remote refused {path}: {detail}", e.code) from None
+    except (urllib.error.URLError, OSError) as e:
+        raise RemoteError(f"remote unreachable for {path}: {e}", 503) from None
+
+
 # Capabilities change only when the far side restarts onto new code, so a
 # short cache keeps this off the path of every pull without going stale for
 # long. Deliberately fail-soft: an unreachable server reports no

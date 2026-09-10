@@ -171,6 +171,37 @@ def _get(path: str, timeout: float = 30.0) -> dict:
             f"ComfyUI is not answering at {COMFY_URL}: {e}") from None
 
 
+def vram() -> Optional[dict]:
+    """What the card has spare, as ComfyUI sees it. None if it cannot say.
+
+    One 12 GB card runs three things here: this, the corpus embedding model
+    (~3.3 GB, released about ten minutes after the last search) and whisper.
+    None of them squats permanently, so most of the time nothing collides —
+    but the natural creative rhythm is exactly the one that does, because you
+    find a quote and then want to picture it.
+
+    Reported rather than enforced. Stopping the corpus server to free memory
+    would kill someone's search mid-thought, and that someone may be another
+    session that never learns why. A number the caller can act on is worth
+    more than a decision taken on their behalf.
+    """
+    try:
+        stats = _get("/system_stats", timeout=10)
+    except GenerateError:
+        return None
+    devices = stats.get("devices") or []
+    if not devices:
+        return None
+    device = devices[0]
+    total = device.get("vram_total")
+    free = device.get("vram_free")
+    if not total:
+        return None
+    return {"name": device.get("name"), "total_mb": round(total / 1048576),
+            "free_mb": round((free or 0) / 1048576),
+            "free_fraction": round((free or 0) / total, 3)}
+
+
 def submit(graph: dict) -> str:
     """Queue one graph. ComfyUI serialises, so this never waits on the GPU."""
     result = _post("/prompt", {"prompt": graph})
@@ -245,6 +276,17 @@ def generate(prompt: str, count: int = 3, workflow: Optional[str] = None,
     count = max(1, min(int(count), 12))
 
     raw, used = load_workflow(workflow)
+    headroom = vram()
+    warning = None
+    if headroom and headroom["free_fraction"] < 0.25:
+        # Not a refusal. ComfyUI queues and will wait for its own memory; the
+        # thing worth saying is *why* it is about to be slow, so nobody
+        # debugs a stall that is really a search still holding the card.
+        warning = (f"only {headroom['free_mb']} MB of "
+                   f"{headroom['total_mb']} MB VRAM free — something else is "
+                   f"holding the card. The corpus embedding model releases "
+                   f"about ten minutes after the last search; stopping the "
+                   f"corpus server frees it now.")
     rng = random.Random(seed)
     seeds = [seed if seed is not None and i == 0
              else rng.randrange(1, 2 ** 31) for i in range(count)]
@@ -273,4 +315,5 @@ def generate(prompt: str, count: int = 3, workflow: Optional[str] = None,
             time.sleep(POLL_INTERVAL_S)
 
     return {"workflow": used, "prompt": prompt, "count": len(images),
-            "seeds": seeds, "images": images}
+            "seeds": seeds, "images": images, "vram": headroom,
+            "warning": warning}

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Body
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .config import get_library_path, set_library_path
@@ -176,12 +176,27 @@ async def setup_library(body: dict = Body(...)):
 
 # ── Items ─────────────────────────────────────────────────────────────────────
 
+REFERENCE_TAG = "reference"
+
+
 @app.get("/api/items")
 def list_items(tag: Optional[str] = None, palette: Optional[str] = None,
-               type: Optional[str] = None):
+               type: Optional[str] = None, references: bool = False):
+    """The library, minus generated references unless you ask for them.
+
+    Three per beat per round fills a picker faster than anything else here,
+    and most are rejected the moment they are looked at. They are kept rather
+    than deleted - "actually the second one was better" is a real thing to
+    want - but kept out of the way.
+
+    Asking for the tag by name still shows them, so nothing becomes
+    unreachable: this hides a default, not the items.
+    """
     root = _root()
     lib = load_library(root)
     items = lib["items"]
+    if not references and tag != REFERENCE_TAG:
+        items = [i for i in items if REFERENCE_TAG not in i["tags"]]
     if tag:
         items = [i for i in items if tag in i["tags"]]
     if palette:
@@ -393,6 +408,165 @@ def serve_thumbnail(iid: str):
     if not thumb.exists():
         raise HTTPException(404)
     return FileResponse(str(thumb), media_type="image/jpeg")
+
+
+@app.get("/api/generate/workflows")
+def generate_workflows():
+    """What templates exist, and whether each will vary across a batch."""
+    from . import generate as gen
+
+    if _remote():
+        from . import qs_remote
+
+        return _remote_call(lambda: qs_remote.get("/api/generate/workflows"))
+    try:
+        return {"workflows": gen.list_workflows(),
+                "directory": str(gen.workflows_dir())}
+    except gen.GenerateError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/generate/image")
+def generate_image(filename: str, subfolder: str = "", type: str = "output"):
+    """One produced image's bytes, straight from ComfyUI.
+
+    A proxy rather than a redirect: ComfyUI listens on the server's loopback
+    and the desktop cannot reach it, so the bytes come back through the same
+    bridge as everything else. Served untouched, because the PNG's text chunks
+    carry the prompt and the whole graph and re-encoding would throw that away.
+    """
+    from . import generate as gen
+
+    try:
+        data = gen.fetch_image({"filename": filename, "subfolder": subfolder,
+                                "type": type})
+    except gen.GenerateError as e:
+        raise HTTPException(502, str(e))
+    return Response(content=data, media_type="image/png")
+
+
+def _append_candidates(root: Path, board_id: str, beat_id: str,
+                       item_ids: list) -> dict:
+    """Add references to one beat without rewriting the board.
+
+    Deliberately additive. `PATCH /api/storyboards/{id}` replaces the panel
+    list wholesale, so a generate that read the board, appended and sent it
+    back would discard anything written while the GPU was busy - and a batch
+    of three takes minutes. Same reasoning that makes batch-tag the safe way
+    to tag an item.
+    """
+    from .storyboard import load_board, save_board
+
+    board = load_board(root, board_id)
+    beat = next((b for b in board.get("panels", [])
+                 if b.get("id") == beat_id), None)
+    if beat is None:
+        raise HTTPException(404, f"no beat '{beat_id}' on board '{board_id}'")
+    existing = [c for c in (beat.get("candidates") or []) if c]
+    beat["candidates"] = existing + [i for i in item_ids if i not in existing]
+    save_board(root, board)
+    return {"board_id": board_id, "beat_id": beat_id,
+            "candidates": beat["candidates"]}
+
+
+@app.post("/api/generate")
+def generate_references(body: dict = Body(...)):
+    """Render a prompt into candidate references. Job/polling like `cut`.
+
+    **Generating never selects.** A finished job leaves `candidates` on the
+    beat and `item_id` untouched, because choosing between them is a
+    judgement and it stays with a person unless someone asks otherwise. That
+    is what lets an unattended run fill a whole board while the taste stays
+    where it belongs.
+    """
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(400, "prompt is required")
+
+    job_id, job = _new_job(images=[], item_ids=[])
+    remote = _remote()
+
+    def _run_job():
+        import asyncio as _asyncio
+
+        from . import generate as gen
+
+        try:
+            if remote:
+                from . import qs_remote
+
+                job["stage"] = "remote:queued"
+                started = qs_remote.post("/api/generate", {
+                    k: v for k, v in body.items()
+                    if k in ("prompt", "count", "workflow", "seed")})
+                remote_id = started["job_id"]
+                deadline = time.time() + 1800
+                finished = None
+                while time.time() < deadline:
+                    j = qs_remote.get("/api/qs/pull/" + remote_id, timeout=30)
+                    job["stage"] = "remote:" + str(j.get("stage", "?"))
+                    if j.get("done"):
+                        finished = j
+                        break
+                    time.sleep(1.5)
+                if finished is None:
+                    raise gen.GenerateError("remote generate did not finish")
+                if finished.get("error"):
+                    raise gen.GenerateError(finished["error"])
+                produced = finished.get("images") or []
+                job["workflow"] = finished.get("workflow")
+
+                def read(image):
+                    return qs_remote.get_bytes("/api/generate/image", {
+                        "filename": image.get("filename", ""),
+                        "subfolder": image.get("subfolder", ""),
+                        "type": image.get("type", "output")})
+            else:
+                result = gen.generate(
+                    prompt, count=int(body.get("count") or 3),
+                    workflow=body.get("workflow") or None,
+                    seed=body.get("seed"),
+                    progress=lambda s: job.__setitem__("stage", s))
+                produced = result["images"]
+                job["workflow"] = result["workflow"]
+                read = gen.fetch_image
+
+            job["stage"] = "storing"
+            root = _root()
+            for index, image in enumerate(produced):
+                name = "gen_" + job_id + "_" + format(index, "02d") + ".png"
+                (root / "media" / name).write_bytes(read(image))
+                item = _asyncio.run(_register_file(
+                    root, name, prompt[:60] + " #" + str(index + 1)))
+                job["item_ids"].append(item["id"])
+            _tag_generated(root, job["item_ids"])
+            job["images"] = produced
+
+            if body.get("board_id") and body.get("beat_id"):
+                job["stage"] = "attaching"
+                job["beat"] = _append_candidates(
+                    root, body["board_id"], body["beat_id"], job["item_ids"])
+            job["stage"] = "done"
+        except Exception as e:
+            job["error"] = str(e)
+            job["stage"] = "failed"
+        finally:
+            _finish_job(job)
+
+    threading.Thread(target=_run_job, daemon=True).start()
+    return {"job_id": job_id}
+
+
+def _tag_generated(root: Path, item_ids: list):
+    """Mark references so the default listing can leave them out of the way."""
+    with library_lock(root):
+        lib = load_library(root)
+        for item in lib["items"]:
+            if item["id"] in item_ids:
+                for tag in (REFERENCE_TAG, "generated"):
+                    if tag not in item["tags"]:
+                        item["tags"].append(tag)
+        save_library(root, lib)
 
 
 @app.get("/api/items/{iid}/words")

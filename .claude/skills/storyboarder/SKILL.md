@@ -176,6 +176,49 @@ prevents, and it costs seconds on the GPU.
    transcript *read* as obvious turned out to be the weakest pause of the three.
    Prose cannot show you a hold.
 
+## Generating references
+
+You have primitives, not modes. What gets automated and what stays yours is
+decided by what you are asked for, not by a setting:
+
+| you are asked | what that composes to |
+|---|---|
+| "make prompts for each image" | draft `image_prompt` per beat and write it. No GPU, no images opened |
+| "get references made, I will pick" | the above, then generate. Leave every beat unselected |
+| "fill it out and use your favourites" | the above, then open the candidates and select |
+
+**Only the third asks you to look at an image, and looking is the expensive
+part.** Do not open one uninvited.
+
+**Default to not selecting.** Taste is the human seat in this project, the
+same way the intent check is. Generating appends to `candidates` and never
+touches `item_id`, so a whole board can be filled while the choosing waits.
+
+**The prompt is a field, so it can be read before it costs anything.** Draft
+`image_prompt` from the beat's `description` and `note`, then stop and let it
+be looked at. Generation is never a side effect of writing a prompt — they are
+two actions, and the whole point of storing the prompt rather than passing it
+as an argument is that an argument cannot be inspected.
+
+```bash
+API=http://127.0.0.1:7861/api
+curl -s "$API/generate/workflows"
+curl -s -X POST "$API/generate" -H 'Content-Type: application/json' -d '{
+  "prompt": "...", "count": 3, "board_id": "<b>", "beat_id": "<beat>"}'
+curl -s "$API/qs/pull/<job_id>"
+```
+
+- **A workflow template must exist** in `<library>/workflows/`. If none does,
+  the call refuses and says what to export from ComfyUI. Do not invent a graph.
+- **Check `warning` on the result.** Below 25% free VRAM it names what is
+  holding the card — usually the embedding model after a search, which frees
+  itself in about ten minutes.
+- Generated images are tagged `reference` and hidden from `GET /api/items`
+  unless you pass `references=true`. That is deliberate; do not untag them.
+- One unattended run of a twenty-beat board is sixty images. **Generate the
+  first beat and look at one image before committing to the rest** — the
+  failure that scales is a wrong prompt style, and it is wrong sixty times.
+
 ## The intent check
 
 The piece is an essay built from other people's voices. The failure that

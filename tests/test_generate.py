@@ -255,3 +255,42 @@ def test_the_batch_is_capped(workflows, comfy):
     write(workflows, "reference")
 
     assert generate.generate("a lobster", count=500)["count"] <= 12
+
+
+# -- one card, three tenants -------------------------------------------------
+
+def test_low_headroom_warns_and_still_runs(workflows, comfy, monkeypatch):
+    """Reported, never enforced.
+
+    Stopping the corpus server to free VRAM would kill someone's search
+    mid-thought, and that someone may be a session that never learns why.
+    ComfyUI queues and waits for its own memory; what is worth saying is why
+    it is about to be slow.
+    """
+    write(workflows, "reference")
+    monkeypatch.setattr(generate, "vram", lambda: {
+        "name": "RTX 3060", "total_mb": 12288, "free_mb": 900,
+        "free_fraction": 0.07})
+
+    result = generate.generate("a lobster", count=1)
+
+    assert result["count"] == 1, "it must still run"
+    assert "900 MB" in result["warning"]
+    assert "corpus" in result["warning"]
+
+
+def test_a_free_card_says_nothing(workflows, comfy, monkeypatch):
+    write(workflows, "reference")
+    monkeypatch.setattr(generate, "vram", lambda: {
+        "name": "RTX 3060", "total_mb": 12288, "free_mb": 11000,
+        "free_fraction": 0.9})
+
+    assert generate.generate("a lobster", count=1)["warning"] is None
+
+
+def test_a_card_that_cannot_be_read_is_not_an_obstacle(workflows, comfy,
+                                                        monkeypatch):
+    monkeypatch.setattr(generate, "_get", lambda *a, **k: {"devices": []})
+    write(workflows, "reference")
+
+    assert generate.vram() is None

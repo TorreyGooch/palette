@@ -1043,3 +1043,68 @@ header; omit the field and the board's name is printed across the top.
 gets wider than it has panels for — two panels at `cols: 3` render two wide,
 not a third of an empty canvas. Row height follows the tallest caption *in
 that row*, so one panel carrying a paragraph does not pad out every other row.
+
+## Generating references for a beat
+
+The GPU renders; a person chooses. That split is the whole design, and it is
+what makes an unattended run safe to ask for.
+
+```bash
+API=http://127.0.0.1:7861/api
+curl -s "$API/generate/workflows"          # what templates exist
+curl -s -X POST "$API/generate" -H 'Content-Type: application/json' -d '{
+  "prompt": "a defeated lobster, low angle, cold rim light",
+  "count": 3, "board_id": "<board>", "beat_id": "<beat>"}'
+curl -s "$API/qs/pull/<job_id>"            # same polling as pull and cut
+```
+
+**The workflow is yours, not ours.** There is no graph in this codebase and
+there will not be one. The server holds krea2, two sizes of flux-2-klein,
+z-image, anima, a reference-to-video model, five LoRAs and eleven VAEs, and
+each combination wants a different text encoder, VAE and sampler — encoding
+any of that in Python means a code change every time you change your mind
+about a model. So export a workflow from ComfyUI with **Workflow > Export
+(API)**, drop it in `<library>/workflows/<name>.json`, and put `{{PROMPT}}`
+where the prompt text goes and `{{SEED}}` where the seed goes. Everything else
+stays where you already edit it.
+
+`{{SEED}}` is optional and its absence is reported by
+`/api/generate/workflows` as `varies_by_seed: false`, because a template
+without it renders the same image three times — legal, occasionally wanted,
+usually a mistake.
+
+There is **no default workflow**. A guessed graph against an unknown model set
+renders plausible garbage, so with no template the call refuses and the
+message says which three clicks fix it.
+
+**Generating never selects.** A finished job appends to the beat's
+`candidates` and leaves `item_id` alone. Choosing between references is a
+judgement and it stays with a person unless someone explicitly asks
+otherwise — which is what lets "fill the board and I will pick later" be one
+sentence rather than a mode.
+
+Attaching is **additive**, under the same reasoning as `batch-tag`: a
+whole-list `PATCH` would discard anything written to the board while the GPU
+was busy, and a batch of three takes minutes.
+
+**Nothing copies the generation parameters into the library.** ComfyUI writes
+the prompt and the entire graph into the PNG's text chunks, so the file
+already answers "how was this made?" — and import is a byte-for-byte copy, so
+it survives. A second copy in `library.json` would only be the one that goes
+stale.
+
+**References are kept but hidden.** Every generated image is tagged
+`reference` and `generated`, and `GET /api/items` leaves them out unless you
+pass `references=true` or ask for the tag by name. Three per beat per round
+fills a picker faster than anything else here and most are rejected on sight,
+but "actually the second one was better" is real, so they are kept out of the
+way rather than deleted.
+
+**One card, three tenants.** ComfyUI, the embedding model (~3.3 GB, released
+about ten minutes after the last search) and whisper share one 12 GB GPU.
+Nothing squats permanently, so most of the time nothing collides — but the
+natural rhythm is the colliding one, because you find a quote and then want to
+picture it. A generate reports `vram` and, below 25% free, a `warning` saying
+what is holding the card. It is **reported, never enforced**: stopping the
+corpus server to free memory would kill a search mid-thought, possibly in a
+session that never learns why.
