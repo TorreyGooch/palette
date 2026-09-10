@@ -390,7 +390,8 @@ const Storyboard = {
           <button class="btn btn-sm btn-danger" title="Remove panel"
                   onclick="Storyboard.removePanel(${i})">✕</button>
         </div>
-        <div class="sb-thumb">${this.thumbFor(p)}</div>
+        <div class="sb-thumb">${this.thumbFor(p) ?? this.candidateStrip(p, i)}</div>
+        ${p.item_id ? this.candidateStrip(p, i) : ''}
         ${this.narrationBlock(p, i)}
         <textarea class="sb-note" rows="3" placeholder="Note — why this beat is here"
                   oninput="Storyboard.setNote(${i}, this.value)">${esc(p.note || '')}</textarea>
@@ -423,7 +424,60 @@ const Storyboard = {
   // modes must not look alike. "image unavailable" used to be shown for all
   // of them, so a quote-only beat was indistinguishable from a lost file —
   // which destroys the exact signal `missing[]` exists to carry.
+  // Which candidate a beat is showing. Deliberately not saved: it is where
+  // you are looking, not a decision, and a board is a record of decisions.
+  shown: {},
+
+  cycle(idx, delta) {
+    const p = this.board.panels[idx];
+    const n = (p.candidate_items || []).length;
+    if (!n) return;
+    const at = ((this.shown[p.id] ?? 0) + delta + n) % n;
+    this.shown[p.id] = at;
+    this.renderPanels();
+  },
+
+  // The one moment a person's taste enters. Everything up to here can be
+  // done unattended; this cannot, which is why generating never does it.
+  chooseCandidate(idx) {
+    const p = this.board.panels[idx];
+    const at = this.shown[p.id] ?? 0;
+    const chosen = (p.candidate_items || [])[at];
+    if (!chosen) return;
+    // Click the chosen one again to unpick: a choice is reconsiderable, and
+    // the other references stay listed precisely so it can be.
+    p.item_id = p.item_id === chosen.id ? null : chosen.id;
+    this.save(true);
+  },
+
+  candidateStrip(p, i) {
+    const list = p.candidate_items || [];
+    if (!list.length) return '';
+    const at = Math.min(this.shown[p.id] ?? 0, list.length - 1);
+    const ref = list[at];
+    const picked = p.item_id === ref.id;
+    return `
+      <div class="sb-candidates">
+        <img src="${esc(ref.image_url)}" loading="lazy"
+             alt="reference ${at + 1} of ${list.length}">
+        <div class="sb-cand-bar">
+          <button class="btn btn-sm" onclick="Storyboard.cycle(${i}, -1)"
+                  title="Previous reference">‹</button>
+          <span class="sb-cand-count">${at + 1} / ${list.length}</span>
+          <button class="btn btn-sm" onclick="Storyboard.cycle(${i}, 1)"
+                  title="Next reference">›</button>
+          <button class="btn btn-sm ${picked ? 'btn-primary' : ''}"
+                  onclick="Storyboard.chooseCandidate(${i})"
+                  title="${picked ? 'Chosen — click to unpick' : 'Use this one'}"
+                  >${picked ? '\u2713 chosen' : 'use this'}</button>
+        </div>
+      </div>`;
+  },
+
   thumbFor(p) {
+    // A chosen reference is just the beat's image, so this only fires while
+    // nothing has been picked - which is the normal state after a run.
+    if (!p.item_id && (p.candidate_items || []).length) return null;
     if (p.image_url) {
       return `<img src="${esc(p.image_url)}" loading="lazy" alt="${esc(p.title)}">`;
     }
@@ -433,10 +487,6 @@ const Storyboard = {
       return text
         ? `<div class="sb-quote">${esc(text)}</div>`
         : '<div class="sb-placeholder">narration — no visual yet</div>';
-    }
-    if ((p.candidates || []).length) {
-      return `<div class="sb-placeholder">${p.candidates.length} reference(s)`
-           + ' — none chosen yet</div>';
     }
     if ((p.description || p.image_prompt || p.video_prompt || '').trim()) {
       return '<div class="sb-placeholder">written only — nothing shot yet</div>';

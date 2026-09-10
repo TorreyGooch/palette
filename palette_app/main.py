@@ -841,7 +841,18 @@ def _panel_view(root: Path, lib: dict, panel: dict) -> dict:
         else:
             narration = {**stored, "missing": True}
 
+    # Candidates are stored as bare ids; the browser needs somewhere to fetch
+    # each one. Derived on read for the same reason `image_url` is - a stored
+    # URL is a copy of a filename, and it goes stale the moment a file moves.
+    candidates = []
+    for cid in panel.get("candidates") or []:
+        found = _find(lib["items"], cid)
+        if found:
+            candidates.append({"id": cid, "title": found.get("title"),
+                               "image_url": f"/api/media/{found['filename']}"})
+
     return {**panel,
+            "candidate_items": candidates,
             "image_url": f"/api/media/{item['filename']}" if item else None,
             "title": item.get("title") if item else None,
             # A beat can be heard and not seen. Only call it missing when it

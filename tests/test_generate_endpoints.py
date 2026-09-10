@@ -211,3 +211,48 @@ def test_a_failure_is_reported_on_the_job_rather_than_swallowed(api, library,
 
     assert job["stage"] == "failed"
     assert "no workflow templates" in job["error"]
+
+
+# -- what the browser needs in order to cycle -------------------------------
+
+def test_candidates_come_back_with_somewhere_to_fetch_them(api, library):
+    """Stored as bare ids; derived on read, for the same reason `image_url`
+    is — a stored URL is a copy of a filename and goes stale when one moves."""
+    tagged(library, "ref-1", "gen_a.png", "reference")
+    tagged(library, "ref-2", "gen_b.png", "reference")
+    board_id, beat_id = board_with_beat(api)
+    api._append_candidates(library, board_id, beat_id, ["ref-1", "ref-2"])
+
+    beat = api.storyboard_get(board_id)["panels"][0]
+
+    assert [c["id"] for c in beat["candidate_items"]] == ["ref-1", "ref-2"]
+    assert beat["candidate_items"][0]["image_url"] == "/api/media/gen_a.png"
+
+
+def test_a_candidate_whose_file_has_gone_is_left_out_rather_than_broken(api,
+                                                                        library):
+    """A dead <img> in the cycler would look like a rendering bug."""
+    tagged(library, "ref-1", "gen_a.png", "reference")
+    board_id, beat_id = board_with_beat(api)
+    api._append_candidates(library, board_id, beat_id, ["ref-1", "deleted"])
+
+    beat = api.storyboard_get(board_id)["panels"][0]
+
+    assert [c["id"] for c in beat["candidate_items"]] == ["ref-1"]
+    assert beat["candidates"] == ["ref-1", "deleted"], "the record is unchanged"
+
+
+def test_choosing_one_is_an_ordinary_beat_edit(api, library):
+    """Selection is just `item_id`, so everything downstream — the render, the
+    timeline, `missing[]` — already knows what to do with it."""
+    tagged(library, "ref-1", "gen_a.png", "reference")
+    board_id, beat_id = board_with_beat(api)
+    api._append_candidates(library, board_id, beat_id, ["ref-1"])
+    board = api.storyboard_get(board_id)
+
+    saved = api.storyboard_update(board_id, body={"panels": [
+        {**board["panels"][0], "item_id": "ref-1"}]})
+
+    beat = saved["panels"][0]
+    assert beat["item_id"] == "ref-1"
+    assert beat["candidates"] == ["ref-1"], "and the set it came from survives"
