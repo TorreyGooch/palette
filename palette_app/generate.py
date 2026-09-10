@@ -15,12 +15,22 @@ where you already edit it, and swapping models needs no code at all.
 Two placeholders, both optional:
 
     {{PROMPT}}   the beat's image_prompt, JSON-escaped for you
-    {{SEED}}     a fresh integer per image, so a batch varies
+    {{SEED}}     the seed, so repeated runs differ
+    {{BATCH}}    how many images one run produces
 
 Substitution happens on the raw text before parsing, which is why `{{SEED}}`
-can sit unquoted where a number belongs. A template with no `{{SEED}}` is
-legal and will simply render the same image every time — occasionally what
-you want, usually a mistake, so it is reported rather than corrected.
+and `{{BATCH}}` can sit unquoted where numbers belong.
+
+**`{{BATCH}}` decides how a count is spent.** With it, one graph is queued and
+ComfyUI renders the whole batch in a single pass — one model load, one sampler
+run, different noise per batch index. Without it, one graph is queued *per
+image*, each with its own seed, which is the only way to vary a template whose
+batch size is fixed. The difference matters: a template that hard-codes
+`batch_size: 3` and is asked for three images the second way renders nine.
+
+A template with no `{{SEED}}` is legal and will render the same thing every
+run — occasionally what you want, usually a mistake, so it is reported rather
+than corrected.
 
 There is deliberately no default workflow. A guessed graph against an unknown
 model set produces plausible garbage, and refusing with instructions is worth
@@ -42,6 +52,7 @@ DEFAULT_TIMEOUT_S = float(os.environ.get("PALETTE_GENERATE_TIMEOUT_S", "900"))
 
 PROMPT_TOKEN = "{{PROMPT}}"
 SEED_TOKEN = "{{SEED}}"
+BATCH_TOKEN = "{{BATCH}}"
 
 
 class GenerateError(RuntimeError):
@@ -80,8 +91,10 @@ def list_workflows() -> list[dict]:
             "name": path.stem,
             "path": str(path),
             "has_prompt": PROMPT_TOKEN in raw,
-            # Without a seed placeholder every image in a batch is identical.
+            # Without a seed placeholder every run renders the same thing.
             "varies_by_seed": SEED_TOKEN in raw,
+            # With it, a count becomes one batched run instead of N runs.
+            "batched": BATCH_TOKEN in raw,
         })
     return out
 
@@ -121,7 +134,7 @@ def load_workflow(name: Optional[str] = None) -> tuple[str, str]:
     return raw, match["name"]
 
 
-def build_graph(raw: str, prompt: str, seed: int) -> dict:
+def build_graph(raw: str, prompt: str, seed: int, batch: int = 1) -> dict:
     """Substitute, then parse. In that order, so {{SEED}} can be a number.
 
     The prompt is JSON-escaped before it goes in: a quote or a backslash in a
@@ -130,7 +143,9 @@ def build_graph(raw: str, prompt: str, seed: int) -> dict:
     apostrophe that caused it.
     """
     escaped = json.dumps(prompt)[1:-1]
-    text = raw.replace(PROMPT_TOKEN, escaped).replace(SEED_TOKEN, str(seed))
+    text = (raw.replace(PROMPT_TOKEN, escaped)
+               .replace(SEED_TOKEN, str(seed))
+               .replace(BATCH_TOKEN, str(int(batch))))
     try:
         graph = json.loads(text)
     except ValueError as e:
@@ -276,6 +291,7 @@ def generate(prompt: str, count: int = 3, workflow: Optional[str] = None,
     count = max(1, min(int(count), 12))
 
     raw, used = load_workflow(workflow)
+    batched = BATCH_TOKEN in raw
     headroom = vram()
     warning = None
     if headroom and headroom["free_fraction"] < 0.25:
@@ -288,14 +304,19 @@ def generate(prompt: str, count: int = 3, workflow: Optional[str] = None,
                    f"about ten minutes after the last search; stopping the "
                    f"corpus server frees it now.")
     rng = random.Random(seed)
+    # One run of `count`, or `count` runs of one. See BATCH_TOKEN above: the
+    # wrong choice against a template that hard-codes a batch size renders
+    # count x batch_size images and occupies the card for as long.
+    runs = 1 if batched else count
     seeds = [seed if seed is not None and i == 0
-             else rng.randrange(1, 2 ** 31) for i in range(count)]
+             else rng.randrange(1, 2 ** 31) for i in range(runs)]
 
     queued = []
     for index, one in enumerate(seeds):
         if progress:
-            progress(f"queueing {index + 1}/{count}")
-        queued.append((submit(build_graph(raw, prompt, one)), one))
+            progress(f"queueing {index + 1}/{runs}")
+        graph = build_graph(raw, prompt, one, batch=count if batched else 1)
+        queued.append((submit(graph), one))
 
     images, deadline = [], time.time() + timeout_s
     for index, (prompt_id, one) in enumerate(queued):
@@ -310,10 +331,11 @@ def generate(prompt: str, count: int = 3, workflow: Optional[str] = None,
                     f"timed out after {timeout_s:.0f}s with {len(images)} of "
                     f"{count} rendered. ComfyUI may still be working — the "
                     f"queue is not cancelled.")
+
             if progress:
-                progress(f"rendering {index + 1}/{count}")
+                progress(f"rendering {index + 1}/{runs}")
             time.sleep(POLL_INTERVAL_S)
 
     return {"workflow": used, "prompt": prompt, "count": len(images),
-            "seeds": seeds, "images": images, "vram": headroom,
-            "warning": warning}
+            "seeds": seeds, "batched": batched, "images": images,
+            "vram": headroom, "warning": warning}

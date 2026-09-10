@@ -294,3 +294,61 @@ def test_a_card_that_cannot_be_read_is_not_an_obstacle(workflows, comfy,
     write(workflows, "reference")
 
     assert generate.vram() is None
+
+
+# -- one run of N, or N runs of one ------------------------------------------
+
+BATCHED = json.dumps({
+    "2": {"class_type": "KSampler", "inputs": {"seed": "{{SEED}}"}},
+    "4": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{PROMPT}}"}},
+    "6": {"class_type": "EmptyLatentImage",
+          "inputs": {"width": 480, "height": 640, "batch_size": "{{BATCH}}"}},
+}).replace('"{{SEED}}"', "{{SEED}}").replace('"{{BATCH}}"', "{{BATCH}}")
+
+
+def test_a_batched_template_queues_one_run(workflows, comfy):
+    """ComfyUI renders a batch in a single pass — one model load, one sampler
+    run, different noise per index. Queueing three graphs instead would pay
+    that cost three times."""
+    write(workflows, "krea2", BATCHED)
+
+    generate.generate("a lobster", count=3)
+
+    assert len(comfy["submitted"]) == 1
+    assert comfy["submitted"][0]["6"]["inputs"]["batch_size"] == 3
+
+
+def test_the_batch_size_is_a_number(workflows, comfy):
+    write(workflows, "krea2", BATCHED)
+    generate.generate("a lobster", count=3)
+    assert isinstance(comfy["submitted"][0]["6"]["inputs"]["batch_size"], int)
+
+
+def test_an_unbatched_template_still_queues_one_run_per_image(workflows, comfy):
+    """The only way to vary a template whose batch size is fixed."""
+    write(workflows, "reference")
+
+    generate.generate("a lobster", count=3)
+
+    assert len(comfy["submitted"]) == 3
+
+
+def test_the_listing_says_which_kind_a_template_is(workflows):
+    """Because asking a hard-coded batch_size of 3 for three images renders
+    nine, and occupies the card for as long."""
+    write(workflows, "krea2", BATCHED)
+    write(workflows, "plain")
+
+    listed = {w["name"]: w for w in generate.list_workflows()}
+
+    assert listed["krea2"]["batched"] is True
+    assert listed["plain"]["batched"] is False
+
+
+def test_a_batched_run_reports_how_it_was_spent(workflows, comfy):
+    write(workflows, "krea2", BATCHED)
+
+    result = generate.generate("a lobster", count=3)
+
+    assert result["batched"] is True
+    assert len(result["seeds"]) == 1, "one run, so one seed"
