@@ -228,8 +228,8 @@ const Storyboard = {
     this.queueSave();
   },
 
-  // Three separate texts, because they have different lifetimes: a
-  // description survives a change of model and a prompt does not.
+  // The two prompts. `note` has its own setter because it is not written at a
+  // model: it says why the beat is here and survives every prompt rewrite.
   setText(idx, field, value) {
     if (!this.board) return;
     this.board.panels[idx][field] = value;
@@ -494,7 +494,7 @@ const Storyboard = {
         ? `<div class="sb-quote">${esc(text)}</div>`
         : '<div class="sb-placeholder">narration — no visual yet</div>';
     }
-    if ((p.description || p.image_prompt || p.video_prompt || '').trim()) {
+    if ((p.image_prompt || p.video_prompt || '').trim()) {
       return '<div class="sb-placeholder">written only — nothing shot yet</div>';
     }
     return '<div class="sb-placeholder">empty beat</div>';
