@@ -208,16 +208,42 @@ curl -s -X POST "$API/generate" -H 'Content-Type: application/json' -d '{
 curl -s "$API/qs/pull/<job_id>"
 ```
 
-- **A workflow template must exist** in `<library>/workflows/`. If none does,
-  the call refuses and says what to export from ComfyUI. Do not invent a graph.
+**`count` means different things to different templates, and the listing says
+which.** Ask `/api/generate/workflows` first:
+
+- `batched: true` — one run renders `count` images in a single pass. This is
+  the cheaper kind and it is what `krea2` is.
+- `batched: false` — `count` separate runs, each with its own seed. The only
+  way to vary a template whose batch size is fixed.
+
+Getting that backwards against a template that hard-codes a batch of three
+renders **nine** images and holds the card three times as long. It is not
+visible until it has happened, so read the flag rather than assuming.
+
+**`krea2` exists and works.** Measured: three 480×640 images in 18 seconds.
+Use it unless you have a reason not to.
+
+**The workflows live on the server, not here.** `/home/torrey/palette-library/
+workflows/` — the machine with the GPU, not the machine with the media. Looking
+in the desktop library for them finds an empty directory and reads as a bug.
+
 - **Check `warning` on the result.** Below 25% free VRAM it names what is
   holding the card — usually the embedding model after a search, which frees
-  itself in about ten minutes.
-- Generated images are tagged `reference` and hidden from `GET /api/items`
-  unless you pass `references=true`. That is deliberate; do not untag them.
+  itself in about ten minutes. Reported, never enforced: it is a reason things
+  are slow, not a refusal.
+- Generated images are tagged `reference` and `generated`, and hidden from
+  `GET /api/items` unless you pass `references=true`. That is deliberate; do
+  not untag them.
+- **A beat with references and no selection is a normal, finished state.** It
+  renders in the app as a cycler — prev / next / "use this" — and a person
+  clicks through it. You are not expected to resolve it.
 - One unattended run of a twenty-beat board is sixty images. **Generate the
   first beat and look at one image before committing to the rest** — the
   failure that scales is a wrong prompt style, and it is wrong sixty times.
+- If a template ever fails to parse, check for a byte-order mark before
+  believing the export is malformed. That is read tolerantly now, but the
+  class of error — an encoding problem wearing a content problem's message —
+  is worth recognising.
 
 ## The intent check
 
