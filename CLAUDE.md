@@ -1150,14 +1150,27 @@ that never learns why, and unloading ComfyUI's models under a generation run
 is the same rudeness pointed the other way. Freeing the card is a decision
 with a person behind it.
 
-**The first search after a reboot is slow for a reason that is not the GPU.**
-The embedding model is fetched by `fastembed`, which caches to
-**`/tmp/fastembed_cache`** — and `/tmp` does not survive a reboot. So the
-first search on a freshly booted machine re-downloads ~1.3 GB from the
-HuggingFace Hub. Measured: 2 m 07 s, during which the caller got no progress
-and finally a bare `Internal Server Error`, which reads as a broken corpus
-rather than a cold cache. Every later search that day is warm and fast.
+**The embedding model is cached somewhere that survives a reboot**, which it
+was not. `fastembed` defaults to `tempfile.gettempdir()/fastembed_cache` —
+`/tmp` on Linux — so the first search after every reboot re-downloaded
+~1.3 GB from the HuggingFace Hub. Measured before the fix: 2 m 07 s, during
+which the caller got no progress and finally a bare `Internal Server Error`.
 
-If a first search hangs for minutes, that is what is happening; `tail
-~/palette-app.log` on the server shows `Fetching 5 files` while it does. Known
-and not yet fixed — pointing the cache somewhere durable would end it.
+Nothing was broken, which is what made it easy to miss for so long. It
+re-downloaded, it worked, and the only symptom was one slow search a person
+would read as the corpus being unwell. A cache whose entire job is to not do
+the work twice was doing it again on every boot.
+
+It now lives in a durable per-user directory — `$XDG_CACHE_HOME/quotesource/
+models`, else `~/.cache/quotesource/models`, and **`QS_MODEL_CACHE`**
+overrides. Deliberately not the corpus data root: the model is refetchable
+and is not corpus data, and a gigabyte of it beside the transcripts would end
+up in every backup of them.
+
+**A slow corpus no longer reports as a broken one.** The bridge waits
+`QS_REMOTE_TIMEOUT` (120 s) and a read timeout used to escape urllib
+unwrapped, past both of its handlers, arriving as a bare 500. It is now a 504
+that says the server is probably still working and to retry — which is the
+honest reading, since the request it gave up on goes on to succeed. If a
+search still times out, `tail ~/palette-app.log` on the server shows what it
+is doing.

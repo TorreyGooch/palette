@@ -14,6 +14,7 @@ import sqlite3
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 from .indexer import connect, _ensure_schema
 
@@ -27,6 +28,42 @@ DEFAULT_MODEL = "BAAI/bge-large-en-v1.5"
 
 def model_name() -> str:
     return os.environ.get("QS_EMBED_MODEL", DEFAULT_MODEL)
+
+
+def model_cache_dir() -> Path:
+    """Where the ONNX model files are kept between runs.
+
+    fastembed defaults to `tempfile.gettempdir()/fastembed_cache`, which on
+    Linux is `/tmp` — and `/tmp` does not survive a reboot. bge-large is
+    ~1.3 GB, so that default quietly turns every reboot into a re-download on
+    the *first* search after it. Measured on the server: 2 m 07 s of silence,
+    and the caller got a timeout rather than a result.
+
+    Nothing was broken, which is what made it easy to miss. It re-downloaded,
+    it worked, and the only symptom was one slow search that a person would
+    read as the corpus being unwell. A cache whose whole job is to not do the
+    work twice was doing it again on every boot.
+
+    So: a durable per-user cache directory, `QS_MODEL_CACHE` to override.
+    Deliberately *not* the corpus data root — the model is not corpus data,
+    it is refetchable, and putting a gigabyte of it beside the transcripts
+    would put it into every backup of them.
+
+    Pure: this only says where. `_build_model` is what creates it, so that
+    asking the question stays free of side effects.
+    """
+    override = (os.environ.get("QS_MODEL_CACHE") or "").strip()
+    if override:
+        return Path(override).expanduser()
+
+    xdg = (os.environ.get("XDG_CACHE_HOME") or "").strip()
+    if xdg:
+        return Path(xdg) / "quotesource" / "models"
+    if os.name == "nt":
+        local = (os.environ.get("LOCALAPPDATA") or "").strip()
+        if local:
+            return Path(local) / "quotesource" / "models"
+    return Path.home() / ".cache" / "quotesource" / "models"
 
 
 EMBED_SCHEMA = """
@@ -56,13 +93,18 @@ def _ensure_embed_schema(con: sqlite3.Connection):
 def _build_model():
     from fastembed import TextEmbedding
 
+    # Downloads on first use, so this is the one place allowed to create the
+    # directory — see model_cache_dir for why it is not the default /tmp one.
+    cache = model_cache_dir()
+    cache.mkdir(parents=True, exist_ok=True)
+
     # GPU path: pip install fastembed-gpu (onnxruntime-gpu). Auto-detected;
     # falls back to CPU silently if CUDA providers aren't available.
     try:
-        return TextEmbedding(model_name(), providers=[
+        return TextEmbedding(model_name(), cache_dir=str(cache), providers=[
             "CUDAExecutionProvider", "CPUExecutionProvider"])
     except Exception:
-        return TextEmbedding(model_name())
+        return TextEmbedding(model_name(), cache_dir=str(cache))
 
 
 # Constructing the ONNX session costs ~0.9s; embedding a query with one

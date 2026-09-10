@@ -18,6 +18,7 @@ justify and no dependency to add.
 import json
 import os
 import shutil
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -25,8 +26,13 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-# Long enough for a cold semantic search (model load + brute-force cosine),
+# Long enough for a warm semantic search (model load + brute-force cosine),
 # short enough to fail rather than hang the UI. Job polling uses its own.
+#
+# It is NOT long enough for a first-ever search on a machine that has to
+# download the embedding model, and deliberately so: minutes of a frozen UI
+# is worse than a message saying to retry. Exceeding it is handled rather
+# than raised — see _slow_message.
 TIMEOUT = float(os.environ.get("QS_REMOTE_TIMEOUT", "120"))
 
 
@@ -89,9 +95,45 @@ def _request(method: str, path: str, params: dict = None,
         # reach the browser as a generic gateway error.
         raise RemoteError(f"remote {e.code}: {detail}", e.code) from None
     except urllib.error.URLError as e:
+        # A connect-phase timeout arrives wrapped in this rather than raw, so
+        # it has to be recognised here too or it reports as unreachable.
+        if isinstance(e.reason, (TimeoutError, socket.timeout)):
+            raise RemoteError(_slow_message(base, timeout or TIMEOUT), 504) from None
         raise RemoteError(f"cannot reach quotesource at {base}: {e.reason}", 503) from None
+    except (TimeoutError, socket.timeout):
+        # A *read* timeout escapes urllib unwrapped, so neither handler above
+        # caught it and it left this function as an unhandled exception —
+        # which FastAPI turned into a bare `Internal Server Error`. The
+        # comment on TIMEOUT said "short enough to fail rather than hang the
+        # UI", and it did fail; it just failed without saying anything, which
+        # reads as a broken corpus rather than a slow one.
+        raise RemoteError(_slow_message(base, timeout or TIMEOUT), 504) from None
 
     return json.loads(raw) if raw else None
+
+
+def _slow_message(base: str, waited: float) -> str:
+    """What to say when the corpus server answered too slowly.
+
+    Names the cause that is actually likely, because the honest reading of a
+    timeout here is "still working", not "broken": the server is single
+    process and a cold semantic search loads the embedding model first. If
+    that model is not on disk it is fetched (~1.3 GB) — measured at 2 m 07 s,
+    comfortably past this timeout — and the request that triggered it goes on
+    to succeed after the caller has given up.
+
+    So the advice is to retry rather than to investigate. It says where to
+    look if retrying does not help, and it says which knob moves the limit,
+    because a message about a timeout that does not name its own timeout
+    leaves the reader grepping for it.
+    """
+    return (
+        f"quotesource at {base} did not answer within {waited:.0f}s. "
+        f"The server is most likely still working rather than broken: a cold "
+        f"semantic search loads the embedding model first, and downloading it "
+        f"the first time takes minutes. Retry in a moment — it will be warm. "
+        f"If it keeps timing out, `tail ~/palette-app.log` on the server shows "
+        f"what it is doing, and QS_REMOTE_TIMEOUT raises this limit.")
 
 
 def get(path: str, params: dict = None, timeout: float = None):
