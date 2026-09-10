@@ -882,7 +882,18 @@ def _clean_panels(lib: dict, panels) -> list:
         stored = p.get("narration") or {}
         narration_id = stored.get("item_id") or None
         texts = {k: (p.get(k) or "").strip()
-                 for k in ("description", "image_prompt", "video_prompt")}
+                 for k in ("image_prompt", "video_prompt")}
+        # `description` was a fourth field and is now folded into the prompt.
+        # Migrated on read rather than by a script: a board is content, and
+        # rewriting someone's files to suit a schema change is a worse trade
+        # than carrying six lines here. The description goes *first* because
+        # it is the thinking on a beat that has no picture yet, and dropping
+        # it would delete exactly the part nobody could reconstruct. The
+        # containment check keeps a re-read from stacking it up.
+        legacy = (p.get("description") or "").strip()
+        if legacy and legacy not in texts["image_prompt"]:
+            texts["image_prompt"] = (
+                f"{legacy}\n\n{texts['image_prompt']}".strip())
         candidates = [c for c in (p.get("candidates") or []) if c]
         # Seen, heard, described, or asked for. Any one of them is a beat, and
         # the rule widens with the fields: a beat that exists only as a
@@ -920,12 +931,11 @@ def _clean_panels(lib: dict, panels) -> list:
 def beat_text(panel: dict) -> str:
     """What a beat says when it has no picture yet.
 
-    Description first, because the rendered board is read by a person and
-    plain language is what serves them; the prompts are instructions to a
-    model. Falls through so a beat that only ever got a prompt still says
-    something rather than rendering blank.
+    The image prompt first, since it describes the frame; falling through to
+    the video prompt so a beat that only ever got one still says something
+    rather than rendering blank.
     """
-    for field in ("description", "image_prompt", "video_prompt"):
+    for field in ("image_prompt", "video_prompt"):
         text = (panel.get(field) or "").strip()
         if text:
             return text
@@ -969,7 +979,7 @@ def storyboard_get(bid: str):
 
 @app.patch("/api/storyboards/{bid}")
 def storyboard_update(bid: str, body: dict = Body(...)):
-    """Rename, and/or replace the panel list wholesale.
+    """Change the board's own fields, and/or replace the panel list wholesale.
 
     Reorder, edit and delete all arrive as one new list. Panels carry their own
     ids, so a full replace is the same amount of work as a diff and cannot get
@@ -980,6 +990,11 @@ def storyboard_update(bid: str, body: dict = Body(...)):
     lib = load_library(root)
     if "name" in body:
         board["name"] = (body["name"] or "").strip() or board["name"]
+    # Unlike the name, this may legitimately be cleared: an empty description
+    # means nobody has said what the piece is yet, which is a real state and
+    # not a mistake to be defended against.
+    if "description" in body:
+        board["description"] = (body["description"] or "").strip()
     if "panels" in body:
         board["panels"] = _clean_panels(lib, body["panels"])
     save_board(root, board)

@@ -368,6 +368,9 @@
                   <span style="font-size:12px;color:var(--muted)" id="sb-count"></span>
                   <button class="btn btn-sm btn-danger" onclick="Storyboard.deleteBoard()">Delete board</button>
                 </div>
+                <textarea id="sb-description" class="sb-board-desc" rows="2"
+                          placeholder="What is this video? — the whole piece in plain language. Outlives every shot below it."
+                          oninput="Storyboard.describeBoard(this.value)"></textarea>
 
                 <div id="sb-drop-zone" class="drop-zone">
                   <div style="font-size:13px">Drop images here to add panels — or click to browse</div>

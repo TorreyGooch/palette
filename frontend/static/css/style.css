@@ -1023,25 +1023,11 @@ video {
   border-left-color: var(--orange);
 }
 
-/* Four texts on a beat, kept apart because they have different lifetimes.
-   The note says why the beat is here and the description says what happens -
-   both survive a change of model. The two prompts are written *at* a model
-   and are stale the day you swap it, so they are drawn as provisional:
-   dashed, dimmer, and visibly a draft rather than a decision. */
-.sb-desc {
-  width: 100%;
-  resize: vertical;
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 1.45;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 6px;
-}
-.sb-desc:focus { outline: none; border-color: var(--orange); }
-
+/* The note says why the beat is here; the prompts say what to make. Kept
+   apart because merging them crowds the reasoning out with craft instructions
+   within a week. The prompts are written *at* a model and stale the day you
+   swap it, so they are drawn as provisional: dashed, and visibly a draft
+   rather than a decision. */
 .sb-prompt {
   width: 100%;
   resize: vertical;
@@ -1172,3 +1158,22 @@ video {
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
+
+
+/* The board's own description: what the whole piece is. Solid-bordered rather
+   than dashed like the prompts, because it is the one text here that is not
+   written at a model and does not go stale when one is swapped. */
+.sb-board-desc {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  margin-bottom: 12px;
+}
+.sb-board-desc:focus { outline: none; border-color: var(--orange); }

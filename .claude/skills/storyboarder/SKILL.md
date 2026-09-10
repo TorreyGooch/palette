@@ -183,6 +183,7 @@ decided by what you are asked for, not by a setting:
 
 | you are asked | what that composes to |
 |---|---|
+| "say what this piece is" | write the board's `description`. No beats touched |
 | "make prompts for each image" | draft `image_prompt` per beat and write it. No GPU, no images opened |
 | "get references made, I will pick" | the above, then generate. Leave every beat unselected |
 | "fill it out and use your favourites" | the above, then open the candidates and select |
@@ -194,11 +195,25 @@ part.** Do not open one uninvited.
 same way the intent check is. Generating appends to `candidates` and never
 touches `item_id`, so a whole board can be filled while the choosing waits.
 
-**The prompt is a field, so it can be read before it costs anything.** Draft
-`image_prompt` from the beat's `description` and `note`, then stop and let it
-be looked at. Generation is never a side effect of writing a prompt — they are
-two actions, and the whole point of storing the prompt rather than passing it
-as an argument is that an argument cannot be inspected.
+**The prompt is a field so it can be read before it is spent.** Draft
+`image_prompt` from the board's `description` and the beat's `note`, then stop
+and let it be looked at. Generation is never a side effect of writing a prompt
+— they are two actions, and the point of storing the prompt rather than
+passing it as an argument is that an argument cannot be inspected.
+
+**The reason is authorship, not compute.** A batched generation measured 11.6
+seconds; the round trip to a human is minutes, so on GPU time the checkpoint
+costs more than the thing it guards. What holds is that the visual choices of
+a piece should not be made unsupervised, and the prompt is where that choice
+lives. That argument does not weaken as the card gets faster. The compute one
+already has, which is why it is not made here.
+
+It is an option rather than a rule, and it may relax. Offer the pause; do not
+insist on it when someone has said to go.
+
+**Know what reading a prompt can and cannot catch.** It catches "this does not
+say what I meant". It cannot catch "this will not work" — that is only visible
+once there are images. Do not treat an approved prompt as a promise.
 
 ```bash
 API=http://127.0.0.1:7861/api
@@ -240,6 +255,10 @@ in the desktop library for them finds an empty directory and reads as a bug.
 - One unattended run of a twenty-beat board is sixty images. **Generate the
   first beat and look at one image before committing to the rest** — the
   failure that scales is a wrong prompt style, and it is wrong sixty times.
+- **A batch shares one seed.** Three images from `count: 3` all report the
+  same seed, so it does not identify which one you liked. Reproduce by
+  rerunning the workflow at that seed and picking again. Known, decided, not
+  a bug to route around.
 - If a template ever fails to parse, check for a byte-order mark before
   believing the export is malformed. That is read tolerantly now, but the
   class of error — an encoding problem wearing a content problem's message —

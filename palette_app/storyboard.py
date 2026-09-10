@@ -62,28 +62,35 @@ def new_panel(item_id: Optional[str] = None, *, note: str = "",
               source_item_id: Optional[str] = None,
               timecode: Optional[float] = None, frame: Optional[int] = None,
               narration: Optional[dict] = None,
-              description: str = "", image_prompt: str = "",
-              video_prompt: str = "", candidates: Optional[list] = None) -> dict:
+              image_prompt: str = "", video_prompt: str = "",
+              candidates: Optional[list] = None) -> dict:
     """One beat of a piece: seen, heard, or asked for — at least one of them.
 
-    Four text fields, and the split is about **lifetime** rather than tidiness.
+    Three text fields.
 
       note           why this beat is here. The audit trail that makes a board
-                     a decision rather than an asset list. Outlives everything.
-      description    what happens in this moment, in plain language. Survives
-                     a change of model, of style, of diffusion stack entirely.
-      image_prompt   how to render one frame of it. Written *at* a particular
-                     model and stale the day you swap it.
-      video_prompt   how to render the motion. Authored last, once the beat is
-                     settled and the references exist. The most disposable.
+                     a decision rather than an asset list.
+      image_prompt   what is in this moment and how to shoot it.
+      video_prompt   how it moves. Authored last, once the beat is settled and
+                     the references exist.
 
-    A description is durable and a prompt is not, which is the whole reason
-    they are not one field: merged, you lose the thing you would be sad to
-    lose in order to keep the thing you would rewrite anyway. The same logic
-    already keeps `note` separate — reasoning gets crowded out by craft
-    instructions within a week.
+    There was a fourth, `description`, split from `image_prompt` on the
+    argument that plain language survives a change of model and a prompt does
+    not. Three beats of real writing showed that holds for *how a thing is
+    shot* and collapses for *what is in it*: "single lobster on wet dark rock"
+    became "single lobster on wet black basalt", and the only thing the prompt
+    added was styling. The subject got written twice, so the fields merged.
 
-    All four are authored rather than derived, so storing them is not a
+    What that knowingly gives up: rewriting a prompt for a new model now takes
+    the plain-language account with it. Weighed and accepted — the simpler
+    shape is worth more than the durable half of a field nobody wrote twice
+    willingly.
+
+    `note` stays separate, and that split did hold under the same test: "the
+    argument is about mechanism, so look at it the way a biologist would" is
+    not the same kind of sentence as anything you would hand a model.
+
+    All three are authored rather than derived, so storing them is not a
     derive-don't-store violation: unlike `frame`, there is nothing to
     recompute them from.
 
@@ -100,18 +107,35 @@ def new_panel(item_id: Optional[str] = None, *, note: str = "",
         "timecode": timecode,
         "frame": frame,
         "narration": narration,
-        "description": description,
         "image_prompt": image_prompt,
         "video_prompt": video_prompt,
         "candidates": list(candidates or []),
     }
 
 
-def new_board(name: str) -> dict:
+def new_board(name: str, description: str = "") -> dict:
+    """A piece, and what it is.
+
+    `description` is the whole video in plain language — the thing no beat can
+    say, because a beat only knows about its own frame. It is also the level
+    that survives everything below it: shots get recut, prompts get rewritten
+    for a new model, references get regenerated, and what the piece is about
+    does not move.
+
+    A beat briefly had a `description` of its own, and it kept turning into
+    the subject line of its own prompt written twice. The thing that actually
+    wanted describing in plain language was never the shot; it was the piece.
+
+    A whole-video prompt will want to live here too, beside this rather than
+    instead of it, once there is a video model to write one at. Deliberately
+    absent until then: the shape of that prompt is decided by whatever
+    consumes it, and guessing now would only have to be undone.
+    """
     now = datetime.now().isoformat()
     return {
         "id": str(uuid.uuid4()),
         "name": name or "Untitled board",
+        "description": description,
         "created": now,
         "modified": now,
         "panels": [],

@@ -913,43 +913,56 @@ no picture impossible to write down, and that is the wrong shape for an essay
 built from other people's words, where the argument's spine is what is *said*
 and the pictures attach to it.
 
-**Four texts, split by how long each one stays true.** That is the whole
-reason there are four rather than one.
+**A board says what the piece is; a beat says what is in front of the camera.**
 
-| field | holds | lifetime |
+| where | field | holds |
 |---|---|---|
-| `note` | why this beat is here | forever — the audit trail that makes a board a decision rather than an asset list |
-| `description` | what happens in this moment, in plain language | forever — survives a change of model, style, or diffusion stack |
-| `image_prompt` | how to render one frame of it | until you swap models |
-| `video_prompt` | how to render the motion | authored last, most disposable of all |
+| board | `name` | what to call it |
+| board | `description` | the whole video in plain language |
+| board | *(a whole-video prompt)* | **not built** — waiting on the video model that will consume it |
+| beat | `note` | why this beat is here — the audit trail |
+| beat | `image_prompt` | what is in this shot, and how it is shot |
+| beat | `video_prompt` | how this shot moves; authored last |
 
-A description — *the lobster loses and its posture collapses* — is durable. A
-prompt — *low angle, cold rim light, shallow DOF* — is written **at** a
-particular model and is stale the day you change it. Merged into one field you
-lose the half you would be sad to lose in order to keep the half you would
-rewrite anyway. All four are authored rather than derived, so storing them is
-not a derive-don't-store violation: unlike `frame`, there is nothing to
-recompute them from.
+A beat briefly had a `description` of its own, split from `image_prompt` on
+the argument that plain language survives a change of model and a prompt does
+not. Three beats of real writing broke it: the split holds for *how a thing is
+shot* and collapses for *what is in it*. "Single lobster on wet dark rock"
+became "single lobster on wet black basalt", and all the prompt added was
+styling — the subject got written twice.
 
-`video_prompt` used to hold what `description` now holds — it was the only
-text besides the note, so it accumulated both jobs. It was renamed while
-almost nothing had been written, which was the cheap moment to do it.
+The better reading is that the thing wanting a plain-language account was
+never the shot; it was the **piece**. So the description moved up to the board,
+where it belongs and where it outlives everything under it: shots get recut,
+prompts get rewritten for a new model, references get regenerated, and what
+the video is about does not move.
 
-**The order of work** runs down that table. Describe the beat, draft an image
-prompt and **inspect it before it reaches the GPU**, generate references,
-choose one; and only once the beats are settled does the video prompt get
-written, because that is the format that depends on everything else being
-decided. The app scaffolds the video first and iterates on the inputs after.
+What the merge knowingly gives up: rewriting a beat's prompt for a new model
+now takes the plain-language account of that shot with it. Weighed and
+accepted. `note` stayed separate and survived the same test — "the argument is
+about mechanism, so look at it the way a biologist would" is not the same kind
+of sentence as anything you would hand a model.
 
-**A beat exists if it is seen, heard, described, asked for, or has
-candidates** — any one of them. A beat written only as a sentence about what
+**A beat's old `description` is folded into its `image_prompt` on read**,
+description first, and never dropped: on a beat with no picture yet it *is*
+the thinking, and it is the part nobody could reconstruct. Migrated on read
+rather than by a script, because a board is content and rewriting someone's
+files to suit a schema change is the worse trade.
+
+**The order of work** runs down that table. Say what the piece is, then per
+beat: write the image prompt, read it before it is spent, generate references,
+choose one. The video prompt is written last, because that format depends on
+everything else being decided. The app scaffolds the video first and iterates
+on the inputs after.
+
+**A beat exists if it is seen, heard, asked for, or has candidates** — any
+one of them. A beat written only as a sentence about what
 should happen is the earliest and most useful kind, and dropping it on save
 would delete the thinking silently. That has happened once already.
 
 A beat with no picture renders as its text in brackets, in its own colour, so
-a board of them reads as a shot list. The **description** is what gets drawn,
-falling through to the prompts only if there is none — the PNG is read by a
-person, and the prompts are instructions to a model. It is **not** reported in
+a board of them reads as a shot list. The **image prompt** is what gets drawn,
+falling through to the video prompt if there is none. It is **not** reported in
 `missing[]`: no image was asked for. One that asked for an image *and* lost it
 still is.
 
@@ -1064,9 +1077,20 @@ z-image, anima, a reference-to-video model, five LoRAs and eleven VAEs, and
 each combination wants a different text encoder, VAE and sampler — encoding
 any of that in Python means a code change every time you change your mind
 about a model. So export a workflow from ComfyUI with **Workflow > Export
-(API)**, drop it in `<library>/workflows/<name>.json`, and put `{{PROMPT}}`
+(API)**, drop it in **`/home/torrey/palette-library/workflows/<name>.json` on
+the server** — the machine with the GPU, not the machine with the media, and
+`/api/generate/workflows` reports the path it is actually reading — and put
+`{{PROMPT}}`
 where the prompt text goes and `{{SEED}}` where the seed goes. Everything else
 stays where you already edit it.
+
+**A batched run shares one seed across its images, and that is left alone.**
+Three images from `count: 3` come back carrying the same seed, so the seed
+does not identify which one you liked. ComfyUI varies the noise per batch
+index internally; the run is still reproducible by rerunning the same workflow
+at the same seed and picking the image again. A `batch_index` field and the
+machinery around it were considered and deliberately not built — this is a
+quirk to know about, not a defect to work around.
 
 `{{SEED}}` is optional and its absence is reported by
 `/api/generate/workflows` as `varies_by_seed: false`, because a template
