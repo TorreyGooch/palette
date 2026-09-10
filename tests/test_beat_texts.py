@@ -261,3 +261,30 @@ def test_empty_candidate_ids_are_dropped(api):
         {"image_prompt": "a lobster", "candidates": ["img-a", "", None]}]})
 
     assert panels_of(saved)[0]["candidates"] == ["img-a"]
+
+
+def test_a_plain_read_folds_it_too_without_any_save(api):
+    """The bug the tests missed: folding lived only on the write path.
+
+    Every test above arrives through a PATCH, so all of them passed while a
+    GET went on returning the old shape — a stored `description` beside a
+    prompt that did not contain it. The live board is what showed it. This
+    writes the legacy shape to disk directly and never saves through the API.
+    """
+    import json
+
+    from palette_app.storyboard import board_path
+
+    board = api.storyboard_create(body={"name": "Cold Open"})
+    api.storyboard_update(board["id"],
+                          body={"panels": [{"image_prompt": "STYLING"}]})
+
+    path = board_path(api._root(), board["id"])
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    stored["panels"][0]["description"] = "THINKING"
+    path.write_text(json.dumps(stored), encoding="utf-8")
+
+    beat = panels_of(api.storyboard_get(board["id"]))[0]
+
+    assert beat["image_prompt"] == "THINKING\n\nSTYLING"
+    assert "description" not in beat, "the retired key must not reach a client"

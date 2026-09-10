@@ -851,7 +851,13 @@ def _panel_view(root: Path, lib: dict, panel: dict) -> dict:
             candidates.append({"id": cid, "title": found.get("title"),
                                "image_url": f"/api/media/{found['filename']}"})
 
+    # Same fold as the write path, and the stored key is dropped from the
+    # view so a client never sees a field that no longer exists.
+    folded = fold_legacy_description(panel)
+    panel = {k: v for k, v in panel.items() if k != "description"}
+
     return {**panel,
+            "image_prompt": folded,
             "candidate_items": candidates,
             "image_url": f"/api/media/{item['filename']}" if item else None,
             "title": item.get("title") if item else None,
@@ -883,17 +889,7 @@ def _clean_panels(lib: dict, panels) -> list:
         narration_id = stored.get("item_id") or None
         texts = {k: (p.get(k) or "").strip()
                  for k in ("image_prompt", "video_prompt")}
-        # `description` was a fourth field and is now folded into the prompt.
-        # Migrated on read rather than by a script: a board is content, and
-        # rewriting someone's files to suit a schema change is a worse trade
-        # than carrying six lines here. The description goes *first* because
-        # it is the thinking on a beat that has no picture yet, and dropping
-        # it would delete exactly the part nobody could reconstruct. The
-        # containment check keeps a re-read from stacking it up.
-        legacy = (p.get("description") or "").strip()
-        if legacy and legacy not in texts["image_prompt"]:
-            texts["image_prompt"] = (
-                f"{legacy}\n\n{texts['image_prompt']}".strip())
+        texts["image_prompt"] = fold_legacy_description(p)
         candidates = [c for c in (p.get("candidates") or []) if c]
         # Seen, heard, described, or asked for. Any one of them is a beat, and
         # the rule widens with the fields: a beat that exists only as a
@@ -926,6 +922,30 @@ def _clean_panels(lib: dict, panels) -> list:
                     "candidates": candidates,
                     **texts})
     return out
+
+
+def fold_legacy_description(panel: dict) -> str:
+    """A beat's `image_prompt`, carrying its retired `description` if it has one.
+
+    `description` was a fourth text on a beat and is now part of the prompt.
+    Migrated here rather than by a script, because a board is content and
+    rewriting someone's files to suit a schema change is the worse trade.
+
+    The description goes *first*: on a beat with no picture yet it is the
+    thinking, and it is the part nobody could reconstruct. The containment
+    check keeps a repeated read from stacking it up.
+
+    Called from **both** the read and the write path, and that is the point.
+    Folding on write alone left every GET returning the old shape - a stored
+    `description` beside a prompt that did not contain it - which is exactly
+    the half-migrated state this exists to avoid. No test caught it because
+    every test arrived through a PATCH; the live board did.
+    """
+    prompt = (panel.get("image_prompt") or "").strip()
+    legacy = (panel.get("description") or "").strip()
+    if legacy and legacy not in prompt:
+        return f"{legacy}\n\n{prompt}".strip()
+    return prompt
 
 
 def beat_text(panel: dict) -> str:
