@@ -86,7 +86,7 @@ def list_workflows() -> list[dict]:
         return []
     out = []
     for path in sorted(directory.glob("*.json")):
-        raw = path.read_text(encoding="utf-8", errors="replace")
+        raw = path.read_text(encoding="utf-8-sig", errors="replace")
         out.append({
             "name": path.stem,
             "path": str(path),
@@ -125,7 +125,11 @@ def load_workflow(name: Optional[str] = None) -> tuple[str, str]:
         raise GenerateError(
             f"several workflows exist and none was named: {names}")
 
-    raw = Path(match["path"]).read_text(encoding="utf-8")
+    # utf-8-sig, not utf-8: a workflow exported or copied through a Windows
+    # tool arrives with a byte-order mark, and json.loads refuses it with an
+    # error about column 1 that reads like a corrupt file. Identical for a
+    # file without one.
+    raw = Path(match["path"]).read_text(encoding="utf-8-sig")
     if PROMPT_TOKEN not in raw:
         raise GenerateError(
             f"workflow '{match['name']}' has no {PROMPT_TOKEN} placeholder, so "

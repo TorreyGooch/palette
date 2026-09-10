@@ -352,3 +352,17 @@ def test_a_batched_run_reports_how_it_was_spent(workflows, comfy):
 
     assert result["batched"] is True
     assert len(result["seeds"]) == 1, "one run, so one seed"
+
+
+def test_a_byte_order_mark_does_not_look_like_a_corrupt_workflow(workflows):
+    """A template that has been through a Windows tool carries a BOM, and
+    json.loads refuses it with an error about column 1 that reads like the
+    file is broken. It is not, and this cost one live run to find out."""
+    (workflows / "krea2.json").write_bytes(
+        b"\xef\xbb\xbf" + BATCHED.encode("utf-8"))
+
+    raw, name = generate.load_workflow("krea2")
+
+    assert name == "krea2"
+    assert generate.build_graph(raw, "a lobster", 1, batch=3)["6"]["inputs"][
+        "batch_size"] == 3
