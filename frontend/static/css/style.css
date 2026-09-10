@@ -1023,8 +1023,25 @@ video {
   border-left-color: var(--orange);
 }
 
-/* The prompt says what to make; the note says why the beat is here. Kept
-   apart on purpose - merged, the reasoning gets crowded out by craft. */
+/* Four texts on a beat, kept apart because they have different lifetimes.
+   The note says why the beat is here and the description says what happens -
+   both survive a change of model. The two prompts are written *at* a model
+   and are stale the day you swap it, so they are drawn as provisional:
+   dashed, dimmer, and visibly a draft rather than a decision. */
+.sb-desc {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+}
+.sb-desc:focus { outline: none; border-color: var(--orange); }
+
 .sb-prompt {
   width: 100%;
   resize: vertical;
@@ -1038,6 +1055,9 @@ video {
   padding: 6px;
 }
 .sb-prompt:focus { outline: none; border-color: var(--orange); border-style: solid; }
+/* Authored last, so it reads as the furthest-off of the four. */
+.sb-video-prompt { opacity: 0.75; }
+.sb-video-prompt:focus { opacity: 1; }
 
 .sb-note {
   width: 100%;

@@ -908,28 +908,57 @@ directory in someone's library is a side effect nobody asked for.
 
 A board's `panels` are **beats**: one moment of the piece. A beat needs a
 visual (a library image), a narration (a clip and a range of its words), **or**
-a `video_prompt` — any one of the three, and at least one. Requiring the image is what once made a quote with
+any of its texts, or generated candidates — at least one of them. Requiring the image is what once made a quote with
 no picture impossible to write down, and that is the wrong shape for an essay
 built from other people's words, where the argument's spine is what is *said*
 and the pictures attach to it.
 
-**Prompt.** `video_prompt` is the third way a beat exists, and the one that
-points forward: nothing has been shot or found yet, and this says what to make.
-A beat that is *only* a prompt is the most useful kind, which is why it counts
-as a beat — requiring an asset would delete it on the next save, silently.
+**Four texts, split by how long each one stays true.** That is the whole
+reason there are four rather than one.
 
-It is deliberately **not** `note`. The note says *why* this beat is here and is
-the audit trail that makes a board a decision rather than an asset list; the
-prompt says *what to generate*. One field for both and the reasoning is crowded
-out by craft instructions within a week. A prompt is authored rather than
-derived, so storing it is not a derive-don't-store violation — there is nothing
-to recompute it from.
+| field | holds | lifetime |
+|---|---|---|
+| `note` | why this beat is here | forever — the audit trail that makes a board a decision rather than an asset list |
+| `description` | what happens in this moment, in plain language | forever — survives a change of model, style, or diffusion stack |
+| `image_prompt` | how to render one frame of it | until you swap models |
+| `video_prompt` | how to render the motion | authored last, most disposable of all |
 
-A prompt-only beat renders as its text in brackets, in its own colour, so a
-board of them reads as a shot list. It is **not** reported in `missing[]`: no
-image was asked for. One that asked for an image *and* lost it still is.
+A description — *the lobster loses and its posture collapses* — is durable. A
+prompt — *low angle, cold rim light, shallow DOF* — is written **at** a
+particular model and is stale the day you change it. Merged into one field you
+lose the half you would be sad to lose in order to keep the half you would
+rewrite anyway. All four are authored rather than derived, so storing them is
+not a derive-don't-store violation: unlike `frame`, there is nothing to
+recompute them from.
 
-`note` is free text and is the whole point of the format.
+`video_prompt` used to hold what `description` now holds — it was the only
+text besides the note, so it accumulated both jobs. It was renamed while
+almost nothing had been written, which was the cheap moment to do it.
+
+**The order of work** runs down that table. Describe the beat, draft an image
+prompt and **inspect it before it reaches the GPU**, generate references,
+choose one; and only once the beats are settled does the video prompt get
+written, because that is the format that depends on everything else being
+decided. The app scaffolds the video first and iterates on the inputs after.
+
+**A beat exists if it is seen, heard, described, asked for, or has
+candidates** — any one of them. A beat written only as a sentence about what
+should happen is the earliest and most useful kind, and dropping it on save
+would delete the thinking silently. That has happened once already.
+
+A beat with no picture renders as its text in brackets, in its own colour, so
+a board of them reads as a shot list. The **description** is what gets drawn,
+falling through to the prompts only if there is none — the PNG is read by a
+person, and the prompts are instructions to a model. It is **not** reported in
+`missing[]`: no image was asked for. One that asked for an image *and* lost it
+still is.
+
+**Candidates.** `candidates` holds generated references that have not been
+chosen between; `item_id` holds the one that was. A beat may have several and
+select none, which is the normal state after an unattended generation run —
+**generating never selects.** Choosing is a judgement, and it stays with a
+person unless someone explicitly asks otherwise. Selecting one leaves the
+others listed, so a choice can be reconsidered without spending the GPU again.
 
 **Narration.** `narration: {"item_id": ..., "word_start": N, "word_end": M}`
 names a staged clip and a span of its words. Only those three inputs are

@@ -62,21 +62,35 @@ def new_panel(item_id: Optional[str] = None, *, note: str = "",
               source_item_id: Optional[str] = None,
               timecode: Optional[float] = None, frame: Optional[int] = None,
               narration: Optional[dict] = None,
-              video_prompt: str = "") -> dict:
+              description: str = "", image_prompt: str = "",
+              video_prompt: str = "", candidates: Optional[list] = None) -> dict:
     """One beat of a piece: seen, heard, or asked for — at least one of them.
 
-    `video_prompt` is the third way a beat can exist, and it is the one that
-    points forward: nothing has been shot or found yet, and this says what to
-    make. A beat that is *only* a prompt is the most useful kind, which is why
-    it has to count as a beat rather than being dropped for having no asset.
+    Four text fields, and the split is about **lifetime** rather than tidiness.
 
-    It is deliberately not `note`. The note says why this beat is here and is
-    the audit trail that makes a board a decision rather than an asset list;
-    the prompt says what to generate. Merged into one field, the reasoning
-    gets crowded out by craft instructions within a week.
+      note           why this beat is here. The audit trail that makes a board
+                     a decision rather than an asset list. Outlives everything.
+      description    what happens in this moment, in plain language. Survives
+                     a change of model, of style, of diffusion stack entirely.
+      image_prompt   how to render one frame of it. Written *at* a particular
+                     model and stale the day you swap it.
+      video_prompt   how to render the motion. Authored last, once the beat is
+                     settled and the references exist. The most disposable.
 
-    Authored rather than derived, so storing it is not a derive-don't-store
-    violation - unlike `frame`, there is nothing to recompute it from.
+    A description is durable and a prompt is not, which is the whole reason
+    they are not one field: merged, you lose the thing you would be sad to
+    lose in order to keep the thing you would rewrite anyway. The same logic
+    already keeps `note` separate — reasoning gets crowded out by craft
+    instructions within a week.
+
+    All four are authored rather than derived, so storing them is not a
+    derive-don't-store violation: unlike `frame`, there is nothing to
+    recompute them from.
+
+    `candidates` holds generated references that have not been chosen between.
+    A beat may have several and select none — that is the normal state after
+    an unattended generation run, and selecting is a judgement left to a
+    person unless someone asks otherwise.
     """
     return {
         "id": str(uuid.uuid4()),
@@ -86,7 +100,10 @@ def new_panel(item_id: Optional[str] = None, *, note: str = "",
         "timecode": timecode,
         "frame": frame,
         "narration": narration,
+        "description": description,
+        "image_prompt": image_prompt,
         "video_prompt": video_prompt,
+        "candidates": list(candidates or []),
     }
 
 

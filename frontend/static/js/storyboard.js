@@ -227,9 +227,11 @@ const Storyboard = {
     this.queueSave();
   },
 
-  setPrompt(idx, value) {
+  // Three separate texts, because they have different lifetimes: a
+  // description survives a change of model and a prompt does not.
+  setText(idx, field, value) {
     if (!this.board) return;
-    this.board.panels[idx].video_prompt = value;
+    this.board.panels[idx][field] = value;
     this.queueSave();
   },
 
@@ -390,11 +392,17 @@ const Storyboard = {
         </div>
         <div class="sb-thumb">${this.thumbFor(p)}</div>
         ${this.narrationBlock(p, i)}
-        <textarea class="sb-note" rows="3" placeholder="Shot note — what happens, why it is here"
+        <textarea class="sb-note" rows="3" placeholder="Note — why this beat is here"
                   oninput="Storyboard.setNote(${i}, this.value)">${esc(p.note || '')}</textarea>
+        <textarea class="sb-desc" rows="2"
+                  placeholder="Description — what happens in this moment"
+                  oninput="Storyboard.setText(${i}, 'description', this.value)">${esc(p.description || '')}</textarea>
         <textarea class="sb-prompt" rows="2"
-                  placeholder="Video prompt — what to generate for this beat"
-                  oninput="Storyboard.setPrompt(${i}, this.value)">${esc(p.video_prompt || '')}</textarea>
+                  placeholder="Image prompt — inspect before it reaches the GPU"
+                  oninput="Storyboard.setText(${i}, 'image_prompt', this.value)">${esc(p.image_prompt || '')}</textarea>
+        <textarea class="sb-prompt sb-video-prompt" rows="2"
+                  placeholder="Video prompt — written last, once the beat is settled"
+                  oninput="Storyboard.setText(${i}, 'video_prompt', this.value)">${esc(p.video_prompt || '')}</textarea>
         <div class="sb-meta">
           <select onchange="Storyboard.setSource(${i}, this.value)"
                   title="Which video this frame came from">
@@ -426,8 +434,12 @@ const Storyboard = {
         ? `<div class="sb-quote">${esc(text)}</div>`
         : '<div class="sb-placeholder">narration — no visual yet</div>';
     }
-    if ((p.video_prompt || '').trim()) {
-      return '<div class="sb-placeholder">prompt only — nothing shot yet</div>';
+    if ((p.candidates || []).length) {
+      return `<div class="sb-placeholder">${p.candidates.length} reference(s)`
+           + ' — none chosen yet</div>';
+    }
+    if ((p.description || p.image_prompt || p.video_prompt || '').trim()) {
+      return '<div class="sb-placeholder">written only — nothing shot yet</div>';
     }
     return '<div class="sb-placeholder">empty beat</div>';
   },
@@ -533,6 +545,8 @@ const Storyboard = {
     const tail = {
       narration: { item_id: n.item_id, word_start: wordIndex, word_end: last },
       note: '',
+      description: '',
+      image_prompt: '',
       video_prompt: '',
     };
     this.board.panels[idx] = {

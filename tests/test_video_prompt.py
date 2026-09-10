@@ -1,16 +1,16 @@
 """A beat can be asked for as well as seen or heard.
 
-The third way a beat exists points forward: nothing has been shot or found
-yet, and the prompt says what to make. That is the interesting case, and the
-rule as written deleted it — `_clean_panels` dropped any panel with neither an
-item nor a narration, so a prompt-only beat vanished silently on the next
-save. Saving something and getting back less than you wrote is the worst shape
-a bug can take, because nothing reports it.
+A beat that points forward — nothing shot or found yet, only a description of
+what to make — is the interesting case, and the rule as written deleted it:
+`_clean_panels` dropped any panel with neither an item nor a narration, so it
+vanished silently on the next save. Saving something and getting back less
+than you wrote is the worst shape a bug can take, because nothing reports it.
 
-The prompt is deliberately not the note. The note says *why* this beat is
-here and is the audit trail that makes a board a decision rather than an asset
-list; the prompt says *what to generate*. One field for both, and the
-reasoning gets crowded out by craft instructions.
+`video_prompt` was that third way for a while, and it has since been split
+into three texts by lifetime — see `test_beat_texts.py`. These tests still
+hold, because the rule they pin is the one that matters and is unchanged: a
+beat written rather than shot survives a save. They now exercise it through
+the field that ended up meaning the final video-model prompt.
 """
 import json
 

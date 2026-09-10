@@ -696,9 +696,15 @@ def _clean_panels(lib: dict, panels) -> list:
         item_id = p.get("item_id") or None
         stored = p.get("narration") or {}
         narration_id = stored.get("item_id") or None
-        prompt = (p.get("video_prompt") or "").strip()
-        if not item_id and not narration_id and not prompt:
-            continue        # not seen, not heard, not asked for: not a beat
+        texts = {k: (p.get(k) or "").strip()
+                 for k in ("description", "image_prompt", "video_prompt")}
+        candidates = [c for c in (p.get("candidates") or []) if c]
+        # Seen, heard, described, or asked for. Any one of them is a beat, and
+        # the rule widens with the fields: a beat that exists only as a
+        # sentence about what should happen is the earliest and most useful
+        # kind, and dropping it on save would delete the thinking silently.
+        if not item_id and not narration_id and not candidates                 and not any(texts.values()):
+            continue
         tc = p.get("timecode")
         tc = float(tc) if tc not in (None, "") else None
         src = p.get("source_item_id") or None
@@ -721,8 +727,24 @@ def _clean_panels(lib: dict, panels) -> list:
                     "timecode": tc,
                     "frame": frame,
                     "narration": narration,
-                    "video_prompt": prompt})
+                    "candidates": candidates,
+                    **texts})
     return out
+
+
+def beat_text(panel: dict) -> str:
+    """What a beat says when it has no picture yet.
+
+    Description first, because the rendered board is read by a person and
+    plain language is what serves them; the prompts are instructions to a
+    model. Falls through so a beat that only ever got a prompt still says
+    something rather than rendering blank.
+    """
+    for field in ("description", "image_prompt", "video_prompt"):
+        text = (panel.get(field) or "").strip()
+        if text:
+            return text
+    return ""
 
 
 def _board_view(root: Path, lib: dict, board: dict) -> dict:
@@ -840,7 +862,7 @@ def storyboard_render(bid: str, body: dict = Body(...)):
         panels.append({
             "image": (root / "media" / item["filename"]) if item else None,
             "quote": quote,
-            "prompt": (p.get("video_prompt") or "").strip() or None,
+            "prompt": beat_text(p) or None,
             "note": p.get("note") or "",
             "timecode": p.get("timecode"),
             "frame": p.get("frame"),
