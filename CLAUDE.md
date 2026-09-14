@@ -1105,8 +1105,9 @@ for an image and lost it is reported even when a quote carries the beat
 anyway. An explicit empty title (`"title": ""`) drops the
 header; omit the field and the board's name is printed across the top.
 
-**Layout worth knowing.** Panels are letterboxed into one uniform box, so a
-9:16 still sits inside a 16:9 frame instead of being stretched. The grid never
+**Layout worth knowing.** Panels are letterboxed into one uniform box in the
+board's `aspect`, so an image of another shape sits inside it instead of being
+stretched - a 3:4 reference on a 9:16 board gets bars above and below. The grid never
 gets wider than it has panels for — two panels at `cols: 3` render two wide,
 not a third of an empty canvas. Row height follows the tallest caption *in
 that row*, so one panel carrying a paragraph does not pad out every other row.

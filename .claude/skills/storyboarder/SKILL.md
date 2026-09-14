@@ -265,6 +265,15 @@ in the desktop library for them finds an empty directory and reads as a bug.
   same seed, so it does not identify which one you liked. Reproduce by
   rerunning the workflow at that seed and picking again. Known, decided, not
   a bug to route around.
+- **Set the board's frame shape before generating.** A board has an `aspect`
+  (width / height): `PATCH /api/storyboards/{id} {"aspect": 0.75}`. The page
+  draws panels in it and the render uses it. The Krea2 workflow renders **3:4
+  portrait** (480x640), for vertical video, so a new board left at the 16:9
+  default shows every reference letterboxed sideways.
+- **Do not ask a tall canvas for a wide picture.** "Landscape", "wide", "wide
+  aspect" in an `image_prompt` on a portrait workflow does not give you a wide
+  shot: the model stacks two wide shots into one tall frame. It happened on
+  both runs of a real beat. Describe what is in the frame, not its shape.
 - If a template ever fails to parse, check for a byte-order mark before
   believing the export is malformed. That is read tolerantly now, but the
   class of error — an encoding problem wearing a content problem's message —
@@ -314,13 +323,25 @@ one piece and they carry no intent.
 
 ## Things that will bite
 
-- A beat needs a visual, a narration, **or** a `video_prompt` — any one of
-  the three. A beat with none of them is dropped on save. A prompt-only beat
-  is a real beat, not a placeholder: it says what to generate for a moment
-  nothing exists for yet, and a board of them reads as a shot list.
+- A beat needs a visual, a narration, any of its texts, **or** references —
+  any one of them. A beat with none is dropped on save. A beat that is only
+  writing is a real beat, not a placeholder: it says what to make for a moment
+  nothing exists for yet.
+- **The rendered PNG prints what the video should do, and nothing else.** The
+  board's `description` under the title; under each panel, that beat's
+  **`video_prompt`** — what happens in the shot. Notes and image prompts stay
+  on the page and are *not* exported. So a board being handed over needs a
+  video prompt on every beat: one without it exports as a picture and a
+  number. Say what moves and what the camera does, plainly and briefly.
 - `PATCH` replaces the panel list **wholesale**. Send the whole list back.
 - Narration times are **derived** from the word manifest on every read. Do not
   set `start`, `end` or `duration`; they are ignored and re-read.
+- **Global timing is what matters, and splitting keeps it whole.** Video is
+  generated from beat durations with the audio laid back alongside later. A
+  beat that the next beat continues (same clip, next word) runs until that
+  one starts, and `narration.hold_s` names the pause it absorbed — so split
+  wherever the shot should change, at any word, and the durations still add
+  up to the clip.
 - A filename does not identify an item. Clip names carry their bounds in
   **milliseconds** now, so a sub-second correction no longer overwrites the
   previous clip's audio and manifest — but several items can still
