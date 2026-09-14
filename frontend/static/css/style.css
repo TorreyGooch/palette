@@ -1136,19 +1136,14 @@ video {
 /* Cycling references a beat has been given but not yet chosen between.
    Which one is on screen is not saved: it is where you are looking, not a
    decision, and a board is a record of decisions. */
-.sb-candidates { display: flex; flex-direction: column; gap: 4px; width: 100%; }
-.sb-candidates img {
-  width: 100%;
-  border-radius: 4px;
-  display: block;
-  background: var(--bg);
-}
+/* Its own row under the picture - see candidateBar for why it left the box. */
 .sb-cand-bar {
   display: flex;
   align-items: center;
   gap: 6px;
   justify-content: center;
 }
+.sb-cand-bar .btn[disabled] { opacity: .4; cursor: default; }
 .sb-cand-count {
   font-size: 11px;
   color: var(--muted, #888);
