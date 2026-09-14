@@ -31,7 +31,6 @@ PANEL_BG = (8, 8, 8)
 RULE = (52, 52, 52)
 NOTE_FG = (222, 222, 222)
 QUOTE_FG = (232, 226, 205)
-PROMPT_FG = (150, 150, 165)
 QUOTE_RULE = (120, 110, 80)
 META_FG = (255, 255, 80)
 TITLE_FG = (245, 245, 245)
@@ -284,11 +283,15 @@ def render_storyboard(
     aspect: float = DEFAULT_ASPECT,
     padding: int = 16,
     max_width: Optional[int] = None,
+    subtitle: Optional[str] = None,
 ) -> dict:
     """Compose an ordered, annotated board into one image.
 
-    `panels` are dicts of {image: Path|None, quote: str|None, note: str,
-    timecode, frame, source_title}.
+    `panels` are dicts of {image: Path|None, quote: str|None, caption: str,
+    asked: bool, timecode, frame, source_title}. `caption` is the one text
+    printed under a panel; `asked` says the beat has writing, so having no
+    picture yet is not a fault. `subtitle` is printed under the title, and
+    only when there is a title.
 
     A beat that is heard and not seen has no image and renders as a quote card,
     because the words are the spine and a beat carrying only words is a normal
@@ -325,32 +328,35 @@ def render_storyboard(
     note_h = line_height(note_font)
     gap = max(6, padding // 2)
 
-    # Wrap every note first: a row is only as tall as its own longest caption,
-    # so one panel with a paragraph does not pad out the whole board.
-    wrapped = [wrap_text(p.get("note") or "", tw,
-                         lambda s: width_of(s, note_font)) for p in panels]
-
-    # The prompt is drawn in the caption, beside the note, rather than inside
-    # the panel box. It has to appear whatever else the beat has: a prompt is
-    # an instruction *about* the beat, not a substitute for its picture, and a
-    # beat most often carries a prompt precisely because it already has a
-    # quote to illustrate. Drawing it only when nothing else filled the box
-    # made it invisible on every beat that mattered, and the PNG is the
-    # artifact a board is handed over as - so a stripped prompt is a silently
-    # lost payload, not a cosmetic gap.
-    prompts = [wrap_text(("> " + (p.get("prompt") or "").strip()) if
-                         (p.get("prompt") or "").strip() else "", tw,
-                         lambda s: width_of(s, note_font)) for p in panels]
+    # One caption per panel: what happens in the shot. It used to be the note
+    # and then the image prompt, both in full - the reasoning and the craft
+    # instructions - and a board of real writing became a wall of text that
+    # buried the pictures it was annotating. Both still live on the page, where
+    # the work happens. The PNG is the handoff, and what it hands over is what
+    # the video should do.
+    #
+    # Row height still follows the longest caption *in that row*, so one panel
+    # with a paragraph does not pad out the whole board.
+    captions = [wrap_text(p.get("caption") or "", tw,
+                          lambda s: width_of(s, note_font)) for p in panels]
 
     rows = [list(range(i, min(i + ncols, len(panels))))
             for i in range(0, len(panels), ncols)]
     row_heights = []
     for row in rows:
-        lines = max((len(wrapped[i]) + len(prompts[i]) for i in row), default=0)
+        lines = max((len(captions[i]) for i in row), default=0)
         row_heights.append(th + gap + meta_h + (lines * note_h) + gap)
 
-    head_h = (line_height(title_font) + padding) if title else 0
     sheet_w = ncols * tw + (ncols + 1) * padding
+    # What the whole piece is, once, under its name - the account a reader
+    # needs before any single shot makes sense. It belongs to the header, so
+    # dropping the title drops it too.
+    sub_lines = (wrap_text((subtitle or "").strip(), sheet_w - 2 * padding,
+                           lambda s: width_of(s, note_font))
+                 if title and (subtitle or "").strip() else [])
+    head_h = ((line_height(title_font) + padding
+               + (len(sub_lines) * note_h + gap if sub_lines else 0))
+              if title else 0)
     sheet_h = head_h + sum(row_heights) + (len(rows) + 1) * padding
 
     sheet = Image.new("RGB", (sheet_w, sheet_h), BG)
@@ -358,6 +364,10 @@ def render_storyboard(
 
     if title:
         draw.text((padding, padding // 2), title, fill=TITLE_FG, font=title_font)
+        sy = padding // 2 + line_height(title_font)
+        for line in sub_lines:
+            draw.text((padding, sy), line, fill=NOTE_FG, font=note_font)
+            sy += note_h
 
     missing = []
     y = head_h + padding
@@ -369,7 +379,7 @@ def render_storyboard(
             draw.rectangle([x, y, x + tw - 1, y + th - 1], fill=PANEL_BG)
             image_path = panel.get("image")
             quote = (panel.get("quote") or "").strip()
-            prompt = (panel.get("prompt") or "").strip()
+            asked = bool(panel.get("asked"))
             drawn = False
             if image_path and Path(image_path).exists():
                 try:
@@ -398,17 +408,17 @@ def render_storyboard(
                     qy += note_h
                 drawn = True
             if not drawn:
-                # Nothing to show at all is worth reporting. A beat that is
-                # only a prompt has something to show and asked for no image,
-                # so it is not missing anything - the same distinction the
-                # page draws, and the reason missing[] is trustworthy.
-                if not image_path and not prompt:
+                # Nothing to show at all is worth reporting. A beat with
+                # writing on it asked for no image yet, so it is not missing
+                # anything - the same distinction the page draws, and the
+                # reason missing[] is trustworthy.
+                if not image_path and not asked:
                     missing.append(idx + 1)
                 # Three states, not two: a lost file is a fault, a beat with
                 # nothing shot yet is doing its job, and an empty beat is
-                # neither. The prompt itself is drawn below with the note.
+                # neither.
                 label = ("image unavailable" if image_path
-                         else "prompt only - nothing shot yet" if prompt
+                         else "nothing shot yet" if asked
                          else "empty beat")
                 draw.text((x + (tw - width_of(label, meta_font)) / 2,
                            y + th / 2 - meta_h / 2),
@@ -419,11 +429,8 @@ def render_storyboard(
             draw.text((x, ty), meta_line(panel, idx + 1, panel.get("source_title")),
                       fill=META_FG, font=meta_font)
             ty += meta_h
-            for line in wrapped[idx]:
+            for line in captions[idx]:
                 draw.text((x, ty), line, fill=NOTE_FG, font=note_font)
-                ty += note_h
-            for line in prompts[idx]:
-                draw.text((x, ty), line, fill=PROMPT_FG, font=note_font)
                 ty += note_h
         y += row_heights[r] + padding
 

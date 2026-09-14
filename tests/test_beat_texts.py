@@ -206,30 +206,6 @@ def test_folding_does_not_stack_up_over_repeated_saves(api):
     assert beat["image_prompt"] == "THINKING\n\nSTYLING"
 
 
-# -- what the rendered board says when there is no picture -------------------
-
-def test_the_render_uses_the_image_prompt(api):
-    from palette_app.main import beat_text
-
-    assert beat_text({"image_prompt": "a lobster on basalt",
-                      "video_prompt": "slow push in"}) == "a lobster on basalt"
-
-
-def test_it_falls_through_so_a_motion_only_beat_still_says_something(api):
-    from palette_app.main import beat_text
-
-    assert beat_text({"video_prompt": "pull back, not cut"}) == \
-        "pull back, not cut"
-    assert beat_text({"note": "why it is here"}) == "", "a note is not shot text"
-
-
-def test_whitespace_is_not_content(api):
-    from palette_app.main import beat_text
-
-    assert beat_text({"image_prompt": " \t ", "video_prompt": "pull back"}) == \
-        "pull back"
-
-
 # -- candidates: generated, not yet chosen between ---------------------------
 
 def test_a_beat_can_hold_candidates_with_nothing_selected(api):

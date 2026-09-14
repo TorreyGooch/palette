@@ -964,11 +964,16 @@ one of them. A beat written only as a sentence about what
 should happen is the earliest and most useful kind, and dropping it on save
 would delete the thinking silently. That has happened once already.
 
-A beat with no picture renders as its text in brackets, in its own colour, so
-a board of them reads as a shot list. The **image prompt** is what gets drawn,
-falling through to the video prompt if there is none. It is **not** reported in
-`missing[]`: no image was asked for. One that asked for an image *and* lost it
-still is.
+**What the rendered PNG says.** Under the title, the board's `description`;
+under each panel, that beat's **video prompt** — what happens in the shot —
+and the one-line caption. The note and the image prompt are not printed. The
+render used to print both in full, and a board of real writing became a wall
+of text that buried its pictures; they stay on the page, where the work
+happens, and the PNG hands over what the video should do. A beat that speaks
+and has no picture still shows its quote. A beat with no picture but with any
+writing or references reads "nothing shot yet" and is **not** reported in
+`missing[]`: no image was lost. One that asked for an image *and* lost it
+still is. An explicit empty title drops the description with it.
 
 **Candidates.** `candidates` holds generated references that have not been
 chosen between; `item_id` holds the one that was. A beat may have several and
@@ -1017,6 +1022,19 @@ laying beats end to end on their narration. A beat with no narration has no
 duration of its own and holds at the current position rather than inventing
 one.
 
+**A beat carried on by the next one runs until that one starts.** A beat on
+its own is measured first word to last. Split, the pause between the halves
+belonged to neither and fell out of the timeline — a 20.3s beat split at a
+1.36s hold became 6.96 + 11.98. Video is generated from these times and the
+audio is laid back alongside afterwards, so the global timing is what has to
+be right, and it was a second and a half short at exactly the speaker's hold.
+When the next beat continues the same clip at the next word, this one now ends
+where that one begins and reports the silence it absorbed as
+`narration.hold_s`; the halves add up to the whole and the pause stays on the
+picture already up. Derived on read, so boards split before this are timed
+correctly too. Beats on different clips, or with words skipped between them,
+keep their own length.
+
 The caption under each panel reads `2.  ·  Source Reel  ·  1:23.5  ·  f2505`,
 omitting whatever is not known. Frame 0 and timecode 0 both print — they are
 real values, not missing ones.
@@ -1061,9 +1079,11 @@ inserted directly after on the same clip; it must fall strictly inside the
 beat's range, and a beat with no narration or no word manifest is refused.
 Everything written on the original — note, prompts, chosen image, candidates —
 stays on the first half, since guessing which half a sentence was about is
-worse than a blank to be written. On the page, click a pause number in the
-strip under a beat's audio; consecutive beats on one quote are marked
-**continues N**.
+worse than a blank to be written. On the page, click **any word** in the
+strip under a beat's audio — not only one after a pause, since a shot changes
+where the picture needs it to; consecutive beats on one quote are marked
+**continues N**, and the earlier one's duration includes any pause before the
+next.
 
 A split resolves "the whole clip" to explicit indices, so a later recut that
 adds words does not stretch the halves; `beats_drifted` reports that case as

@@ -170,8 +170,10 @@ prevents, and it costs seconds on the GPU.
    note above each beat it names. Nothing else will tell you.
 5. Long quotes have been read as **pauses, not prose**. The app draws a strip
    under a narration beat marking the gap in milliseconds between every word,
-   with the holds worth splitting on highlighted; clicking one splits the beat
-   there. You split with the same call the page uses:
+   with the holds highlighted. A hold is a good place to split and not the
+   only one: any word can start a new beat, and the timing stays whole because
+   a beat carried on by the next runs until that one starts. You split with
+   the same call the page uses:
    `POST /api/storyboards/{id}/panels/{beat}/split {"at_word": N}`, where N
    starts the new beat. The note, prompts and references stay with the first
    half; write the second. Read the gaps — a 20.3s beat
@@ -188,7 +190,7 @@ decided by what you are asked for, not by a setting:
 |---|---|
 | "say what this piece is" | write the board's `description`. No beats touched |
 | "make prompts for each image" | draft `image_prompt` per beat and write it. No GPU, no images opened |
-| "this beat needs more than one picture" | read its pauses, split at the holds, then prompt each half. No GPU |
+| "this beat needs more than one picture" | split where the shot should change - a hold if there is one near - then prompt each half. No GPU |
 | "get references made, I will pick" | the above, then generate. Leave every beat unselected |
 | "fill it out and use your favourites" | the above, then open the candidates and select |
 

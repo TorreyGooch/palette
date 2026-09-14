@@ -1251,3 +1251,6 @@ video {
 .sb-viewer-stage.actual { align-items: flex-start; justify-content: flex-start; }
 .sb-viewer-stage.actual img { max-width: none; max-height: none; cursor: zoom-out; }
 
+/* Every word after the first starts a new beat when clicked. */
+.sb-word.hit { cursor: pointer; border-radius: 2px; }
+.sb-word.hit:hover { background: var(--orange); color: var(--bg); opacity: 1; }

@@ -29,8 +29,10 @@ def write_png(path, color=(200, 30, 30), size=(320, 180)):
     return path
 
 
-def panel(image=None, note="", **kw):
-    p = {"image": image, "note": note}
+def panel(image=None, caption="", **kw):
+    # What the renderer prints under a panel. It was the note; since the render
+    # prints each beat's video prompt instead, the layout tests pass a caption.
+    p = {"image": image, "caption": caption}
     p.update(kw)
     return p
 

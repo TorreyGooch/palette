@@ -953,27 +953,50 @@ def fold_legacy_description(panel: dict) -> str:
     return prompt
 
 
-def beat_text(panel: dict) -> str:
-    """What a beat says when it has no picture yet.
-
-    The image prompt first, since it describes the frame; falling through to
-    the video prompt so a beat that only ever got one still says something
-    rather than rendering blank.
-    """
-    for field in ("image_prompt", "video_prompt"):
-        text = (panel.get(field) or "").strip()
-        if text:
-            return text
-    return ""
-
-
 def _board_view(root: Path, lib: dict, board: dict) -> dict:
     """A board with every beat enriched, plus where each one falls in time."""
     beats = [_panel_view(root, lib, p) for p in board.get("panels", [])]
+    _tile_continuing_beats(beats)
     # A board saved before `aspect` existed rendered as 16:9, so that is what
     # its absence means - the same default the renderer always used.
     return {**board, "aspect": board.get("aspect") or DEFAULT_ASPECT,
             "panels": beats, "timeline": narration_layout(beats)}
+
+
+def _tile_continuing_beats(beats: list):
+    """A beat that is carried on by the next one runs until that one starts.
+
+    A beat's audio is measured from its first word to its last. That is right
+    for a quote on its own and wrong the moment it is split: the pause between
+    the halves belongs to neither, so it fell out of the timeline. A 20.3s
+    beat split at a 1.36s hold became 6.96 + 11.98 - and video is generated
+    from these times with the audio laid back alongside afterwards, so the
+    piece came out a second and a half short at exactly the moment the speaker
+    held.
+
+    So when the next beat continues the *same clip at the next word*, this one
+    ends where that one begins, and `hold_s` says how much silence it
+    absorbed. The halves then add up to the whole by construction, and the
+    pause stays on the picture that is already up. Derived on read: nothing
+    is stored, so every board split before this is timed correctly too.
+    Beats that do not continue each other - different clips, or a skipped
+    stretch of words - keep their own word-measured length.
+    """
+    for cur, nxt in zip(beats, beats[1:]):
+        a, b = cur.get("narration"), nxt.get("narration")
+        if not a or not b or a.get("missing") or b.get("missing"):
+            continue
+        if a.get("precision") != "word" or b.get("precision") != "word":
+            continue
+        if a.get("item_id") != b.get("item_id") or a.get("word_end") is None:
+            continue
+        if b.get("word_start") != a["word_end"] + 1:
+            continue
+        if b.get("start") is None or a.get("end") is None or b["start"] < a["end"]:
+            continue
+        a["hold_s"] = round(b["start"] - a["end"], 3)
+        a["end"] = b["start"]
+        a["duration"] = round(a["end"] - a["start"], 3)
 
 
 # Narrower than any real frame or wider than any real frame is a typo, not a
@@ -1215,8 +1238,16 @@ def storyboard_render(bid: str, body: dict = Body(...)):
         panels.append({
             "image": (root / "media" / item["filename"]) if item else None,
             "quote": quote,
-            "prompt": beat_text(p) or None,
-            "note": p.get("note") or "",
+            # What the PNG says about a beat is what happens in it. The note
+            # (why it is here) and the image prompt (how to draw the frame)
+            # stay on the page; printing both in full made the handoff a wall
+            # of text that buried the pictures.
+            "caption": (p.get("video_prompt") or "").strip(),
+            # A beat with any writing or references has asked for a picture it
+            # does not have yet, which is not the same as having lost one.
+            "asked": bool(fold_legacy_description(p)
+                          or (p.get("video_prompt") or "").strip()
+                          or p.get("candidates")),
             "timecode": p.get("timecode"),
             "frame": p.get("frame"),
             "source_title": (source.get("title") if source else None) or speaker,
@@ -1236,6 +1267,7 @@ def storyboard_render(bid: str, body: dict = Body(...)):
     result = render_storyboard(
         panels, out_path,
         title=title,
+        subtitle=(board.get("description") or "").strip() or None,
         cols=int(body.get("cols", 3)),
         tile_width=int(body.get("tile_width", 360)),
         aspect=float(aspect) if aspect else DEFAULT_ASPECT,

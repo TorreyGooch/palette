@@ -605,7 +605,8 @@ const Storyboard = {
     return `
       <div class="sb-narr">
         <div class="sb-narr-time">
-          <span class="sb-dur">${n.duration == null ? '—' : n.duration.toFixed(1) + 's'}</span>
+          <span class="sb-dur" title="${n.hold_s ? `Runs until the next beat starts, including a ${n.hold_s.toFixed(2)}s pause` : 'First word to last word'}">${
+            n.duration == null ? '—' : n.duration.toFixed(1) + 's'}${n.hold_s ? ' ·hold' : ''}</span>
           ${at ? `<span class="sb-at" title="Start and end within the piece">${
             fmtDuration(at.at)} → ${fmtDuration(at.until)}</span>` : ''}
           <span style="flex:1"></span>
@@ -661,13 +662,20 @@ const Storyboard = {
                      ${splittable ? `onclick="Storyboard.splitAt(${i}, ${w.index})"` : ''}
                      >${gap >= 0.12 ? Math.round(gap * 1000) : ''}</span>`;
       }
-      return sep + `<span class="sb-word">${esc(w.word)}</span>`;
+      // Any word can start a new beat, not only one after a pause: a shot
+      // changes where the picture needs it to, and the timing stays whole
+      // either way because a beat runs until the next one starts.
+      const word = splittable
+        ? `<span class="sb-word hit" title="Start a new beat at this word"
+                 onclick="Storyboard.splitAt(${i}, ${w.index})">${esc(w.word)}</span>`
+        : `<span class="sb-word">${esc(w.word)}</span>`;
+      return sep + word;
     });
 
     // Said on the page, not only in a tooltip: splitting was built and then
     // went unfound, because nothing visible said the numbers were clickable.
     return `<div class="sb-pauses">
-      <div class="sb-pauses-hint">click a pause to split this beat there</div>${
+      <div class="sb-pauses-hint">click any word to start a new beat there</div>${
       bits.join('')}</div>`;
   },
 

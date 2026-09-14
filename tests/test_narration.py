@@ -284,8 +284,8 @@ def test_the_board_reports_where_each_beat_falls_in_time(api, library):
 
 # ── rendering a beat that speaks ──────────────────────────────────────────────
 
-def beat(image=None, quote=None, note=""):
-    return {"image": image, "quote": quote, "note": note}
+def beat(image=None, quote=None, caption=""):
+    return {"image": image, "quote": quote, "caption": caption}
 
 
 def test_a_quote_renders_as_a_card_not_a_hole(tmp_path):
@@ -306,7 +306,7 @@ def test_a_lost_image_is_still_reported_even_when_a_quote_carries_the_beat(tmp_p
 
 
 def test_a_beat_with_neither_is_still_reported(tmp_path):
-    assert sb.render_storyboard([beat(note="nothing")],
+    assert sb.render_storyboard([beat(caption="nothing")],
                                 tmp_path / "b.png")["missing"] == [1]
 
 
