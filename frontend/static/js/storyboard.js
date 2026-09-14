@@ -393,6 +393,7 @@ const Storyboard = {
           <span class="sb-grip" onmousedown="Storyboard.armDrag(this)"
                 title="Drag to reorder">⠿</span>
           <span class="sb-num">${i + 1}</span>
+          ${this.continuesFrom(panels, i)}
           <span style="flex:1"></span>
           <button class="btn btn-sm" title="Move earlier"
                   onclick="Storyboard.move(${i}, -1)">↑</button>
@@ -409,6 +410,7 @@ const Storyboard = {
         <textarea class="sb-prompt" rows="2"
                   placeholder="Image prompt — what is in the shot, and how it is shot"
                   oninput="Storyboard.setText(${i}, 'image_prompt', this.value)">${esc(p.image_prompt || '')}</textarea>
+        ${this.generateRow(p, i)}
         <textarea class="sb-prompt sb-video-prompt" rows="2"
                   placeholder="Video prompt — written last, once the beat is settled"
                   oninput="Storyboard.setText(${i}, 'video_prompt', this.value)">${esc(p.video_prompt || '')}</textarea>
@@ -461,6 +463,10 @@ const Storyboard = {
   // Which candidate a beat is showing. Deliberately not saved: it is where
   // you are looking, not a decision, and a board is a record of decisions.
   shown: {},
+
+  // Generate jobs in flight, by beat id. Where you are waiting, not a
+  // decision, so like `shown` it is never saved.
+  generating: {},
 
   cycle(idx, delta) {
     const p = this.board.panels[idx];
@@ -609,36 +615,148 @@ const Storyboard = {
       return sep + `<span class="sb-word">${esc(w.word)}</span>`;
     });
 
-    return `<div class="sb-pauses" title="Click a gap to split this beat">${
+    // Said on the page, not only in a tooltip: splitting was built and then
+    // went unfound, because nothing visible said the numbers were clickable.
+    return `<div class="sb-pauses">
+      <div class="sb-pauses-hint">click a pause to split this beat there</div>${
       bits.join('')}</div>`;
   },
 
   // Split a beat at a pause: the words before it stay, the rest become a new
-  // beat immediately after. The note stays with the first — it explains the
-  // reasoning that was written about that opening, and the new beat needs its
-  // own rather than inheriting a claim about different words.
-  splitAt(idx, wordIndex) {
-    if (!this.board) return;
-    const panel = this.board.panels[idx];
-    const n = panel?.narration;
-    if (!n) return;
-    const first = n.word_start ?? 0;
-    const last = n.word_end ?? (n.word_total ? n.word_total - 1 : 0);
-    if (wordIndex <= first || wordIndex > last) return;
-
-    const tail = {
-      narration: { item_id: n.item_id, word_start: wordIndex, word_end: last },
-      note: '',
-      image_prompt: '',
-      video_prompt: '',
-    };
-    this.board.panels[idx] = {
-      ...panel,
-      narration: { item_id: n.item_id, word_start: first, word_end: wordIndex - 1 },
-    };
-    this.board.panels.splice(idx + 1, 0, tail);
+  // beat immediately after. Done by the server rather than by rewriting the
+  // panel list here, so it is one primitive whether a person clicks it or a
+  // session asks for it in conversation - and so no stale autosave can undo it.
+  async splitAt(idx, wordIndex) {
+    if (!this.board?.panels[idx]?.narration) return;
+    // Flush first. The split is written server-side, and an edit still
+    // waiting in the autosave queue would otherwise be lost to it.
+    await this.save();
+    const beat = this.board.panels[idx];
+    if (!beat?.id) return;
+    try {
+      this.board = await api(
+        `/api/storyboards/${encodeURIComponent(this.board.id)}/panels/${
+          encodeURIComponent(beat.id)}/split`,
+        { method: 'POST', body: { at_word: wordIndex } });
+    } catch (e) { toast(e.message, 'error'); return; }
     this.renderPanels();
-    this.save(true);
+    const summary = this.boards.find(b => b.id === this.board.id);
+    if (summary) summary.panels = this.board.panels.length;
+    this.renderBoardList();
+  },
+
+  // "continues 2" on a beat that picks up the previous beat's quote at the
+  // next word, so a split reads as one quote in several shots rather than as
+  // separate quotes that happen to sit together.
+  continuesFrom(panels, i) {
+    const prev = panels[i - 1]?.narration;
+    const cur = panels[i]?.narration;
+    if (!prev || !cur || prev.missing || cur.missing) return '';
+    if (prev.item_id !== cur.item_id || prev.word_end == null) return '';
+    if (cur.word_start !== prev.word_end + 1) return '';
+    return `<span class="sb-continues" title="The same quote as beat ${i}, carried on at the next word">continues ${i}</span>`;
+  },
+
+  // ── Generating references ─────────────────────────────────────────────────
+
+  generateRow(p, i) {
+    const busy = this.generating[p.id];
+    const has = (p.candidate_items || []).length;
+    const label = busy ? this.generateLabel(busy)
+      : has ? 'Generate 3 more' : 'Generate 3';
+    return `
+      <div class="sb-gen">
+        <button class="btn btn-sm" id="sb-gen-${esc(p.id)}" ${busy ? 'disabled' : ''}
+                title="Render this beat's image prompt into three references. Nothing is chosen for you."
+                onclick="Storyboard.generate(${i})">${esc(label)}</button>
+      </div>`;
+  },
+
+  generateLabel(busy) {
+    const secs = Math.round((Date.now() - busy.t0) / 1000);
+    return `${busy.stage || 'queued'} · ${secs}s`;
+  },
+
+  // The image prompt as written on the beat, rendered into references that
+  // land on this beat as candidates. Generating never selects; choosing
+  // stays with whoever cycles through them.
+  async generate(idx) {
+    if (!this.board?.panels[idx]) return;
+    // The references attach to the beat by id on the server, so the beat and
+    // its prompt have to be there first.
+    await this.save();
+    const beat = this.board.panels[idx];
+    if (!beat?.id || this.generating[beat.id]) return;
+    const prompt = (beat.image_prompt || '').trim();
+    if (!prompt) {
+      toast('Write an image prompt on this beat first - that is what gets rendered', 'error');
+      return;
+    }
+    const boardId = this.board.id;
+    const beatId = beat.id;
+    let job_id;
+    try {
+      ({ job_id } = await api('/api/generate', {
+        method: 'POST',
+        body: { prompt, count: 3, board_id: boardId, beat_id: beatId },
+      }));
+    } catch (e) { toast(e.message, 'error'); return; }
+
+    this.generating[beatId] = { stage: 'queued', t0: Date.now() };
+    this.paintGenerate(beatId);
+    const poll = setInterval(async () => {
+      let job;
+      try { job = await api(`/api/qs/pull/${job_id}`); } catch { return; }
+      const busy = this.generating[beatId];
+      if (!busy) { clearInterval(poll); return; }
+      busy.stage = job.stage;
+      if (!job.done) { this.paintGenerate(beatId); return; }
+      clearInterval(poll);
+      delete this.generating[beatId];
+      if (job.error) {
+        toast(`Generate failed: ${job.error}`, 'error');
+        this.paintGenerate(beatId);
+        return;
+      }
+      if (job.warning) toast(job.warning);
+      toast(`${(job.item_ids || []).length} references ready - cycle through them on the beat`, 'success');
+      if (this.board?.id === boardId) await this.refreshKeepingFocus();
+    }, 1500);
+  },
+
+  // Update one button in place; a full re-render every poll would take the
+  // cursor out of whatever is being typed.
+  paintGenerate(beatId) {
+    const btn = document.getElementById(`sb-gen-${beatId}`);
+    if (!btn) return;
+    const busy = this.generating[beatId];
+    btn.disabled = !!busy;
+    const beat = this.board?.panels.find(p => p.id === beatId);
+    btn.textContent = busy ? this.generateLabel(busy)
+      : (beat?.candidate_items || []).length ? 'Generate 3 more' : 'Generate 3';
+  },
+
+  // Show references that arrived while the page was open. A save rather than
+  // a plain reload: it sends anything typed in the meantime, the server keeps
+  // the candidates the page has not heard of, and the response has both. The
+  // re-render would drop the cursor, so it is put back where it was.
+  async refreshKeepingFocus() {
+    const active = document.activeElement;
+    const panelEl = active?.closest?.('.sb-panel');
+    let restore = null;
+    if (panelEl && active.tagName === 'TEXTAREA') {
+      restore = {
+        index: [...panelEl.parentElement.children].indexOf(panelEl),
+        cls: active.className,
+        from: active.selectionStart,
+        to: active.selectionEnd,
+      };
+    }
+    await this.save(true);
+    if (!restore) return;
+    const panel = document.getElementById('sb-panels')?.children[restore.index];
+    const ta = panel?.querySelector(`textarea[class="${restore.cls}"]`);
+    if (ta) { ta.focus(); ta.setSelectionRange(restore.from, restore.to); }
   },
 
   renderEstimate() {

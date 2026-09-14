@@ -151,11 +151,20 @@ def board_path(root: Path, bid: str) -> Path:
 
 
 def save_board(root: Path, board: dict) -> dict:
+    """Write a board atomically.
+
+    It used to be a plain write_text, which truncates first - so a generate
+    job attaching references and an autosave landing together could leave a
+    half-written board, and a board is someone's notes. Callers that load,
+    change and save must also hold `library_lock`; this only guarantees the
+    file is never a fragment.
+    """
+    from .library import write_json_atomic
+
     board["modified"] = datetime.now().isoformat()
     path = board_path(root, board["id"])
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(board, indent=2, ensure_ascii=False),
-                    encoding="utf-8")
+    write_json_atomic(path, board, indent=2, ensure_ascii=False)
     return board
 
 

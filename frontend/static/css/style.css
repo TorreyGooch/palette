@@ -991,8 +991,6 @@ video {
   font-size: 11px;
   line-height: 1.9;
   color: var(--text);
-  max-height: 96px;
-  overflow-y: auto;
   border-top: 1px solid var(--border);
   padding-top: 5px;
 }
@@ -1184,3 +1182,26 @@ video {
   resize: none;
   overflow-y: hidden;
 }
+
+/* Said on the page rather than in a tooltip, so splitting can be found. The
+   strip itself is no longer capped at 96px - it was one more box you had to
+   scroll inside to read what a beat says. */
+.sb-pauses-hint {
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.4;
+  margin-bottom: 2px;
+}
+
+/* A beat that carries on the previous beat's quote. */
+.sb-continues {
+  font-size: 10px;
+  color: var(--orange);
+  border: 1px solid var(--orange);
+  border-radius: 3px;
+  padding: 0 4px;
+  opacity: .8;
+}
+
+.sb-gen { display: flex; justify-content: flex-end; }
+.sb-gen .btn[disabled] { opacity: .7; cursor: progress; }

@@ -211,24 +211,23 @@ def load_library(root: Path) -> dict:
                 time.sleep(0.01)
 
 
-def save_library(root: Path, lib: dict):
-    """Replace the database, atomically.
+def write_json_atomic(path: Path, data, *, indent=2, ensure_ascii=True):
+    """Replace a JSON file atomically: a reader sees the old file or the new.
 
     Written to a temporary file in the same directory and moved into place,
     because a plain overwrite truncates first: a crash, a full disk or a
-    second writer landing mid-dump leaves a half-written library.json, and
-    that file *is* the media database - every item, tag and palette. os.replace
-    is atomic on both POSIX and Windows, so a reader sees either the old
-    database or the new one and never a fragment of either.
+    second writer landing mid-dump leaves half a file. os.replace is atomic
+    on both POSIX and Windows.
 
     This does not make a read-modify-write safe on its own. Hold
     `library_lock` around load-then-save for that.
     """
-    root = Path(root)
-    fd, tmp = tempfile.mkstemp(dir=str(root), prefix=".library-", suffix=".tmp")
+    path = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.stem}-",
+                               suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(lib, f, indent=2)
+            json.dump(data, f, indent=indent, ensure_ascii=ensure_ascii)
             f.flush()
             os.fsync(f.fileno())
         # os.replace is atomic on both platforms, but on Windows it also
@@ -242,7 +241,7 @@ def save_library(root: Path, lib: dict):
         deadline = time.monotonic() + REPLACE_TIMEOUT_S
         while True:
             try:
-                os.replace(tmp, root / "library.json")
+                os.replace(tmp, path)
                 break
             except PermissionError:
                 if time.monotonic() >= deadline:
@@ -254,6 +253,15 @@ def save_library(root: Path, lib: dict):
         except OSError:
             pass
         raise
+
+
+def save_library(root: Path, lib: dict):
+    """Replace the database, atomically.
+
+    That file *is* the media database - every item, tag and palette - so a
+    half-written one is the worst thing this app can leave on disk.
+    """
+    write_json_atomic(Path(root) / "library.json", lib)
 
 
 def is_library(root: Path) -> bool:

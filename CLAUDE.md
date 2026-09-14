@@ -1027,6 +1027,7 @@ GET    /api/storyboards/{id}          // panels enriched with image_url, titles
 PATCH  /api/storyboards/{id}          {"name": "...", "panels": [...]}
 DELETE /api/storyboards/{id}
 POST   /api/storyboards/{id}/panels   {"item_ids": ["..."]}    // append
+POST   /api/storyboards/{id}/panels/{beat}/split  {"at_word": N}  // additive
 POST   /api/storyboards/{id}/render   {"cols": 3, "tile_width": 360,
                                        "aspect": 1.7777, "padding": 16,
                                        "max_width": 2048, "title": "..."}
@@ -1037,6 +1038,35 @@ arrive as one new list. Panels carry their own ids, so a full replace costs
 the same as a diff and cannot get out of step with what the user is looking
 at. A beat with **neither** a visual nor a narration is dropped; a blank
 `timecode` clears rather than becoming zero.
+
+**A `PATCH` never erases candidates it does not mention.** References attach
+minutes after a page loaded the board, and until it reloads every autosave
+carries that beat's old list — so typing a note while the GPU rendered used to
+erase the images it had just made. Stored candidates a payload leaves out are
+kept; a beat the payload leaves out is still deleted, because that is a
+decision rather than a list the page had not heard about. Nothing removes a
+candidate today; if that is ever wanted it needs its own additive call.
+
+**Every board write holds `library_lock` and is atomic.** `save_board` was a
+plain overwrite with no lock, so a generate attaching references and an
+autosave landing together could lose one write or leave half a file. It now
+shares `write_json_atomic` with `save_library`.
+
+**Splitting a beat.** A long quote is often several shots, and the shape for
+that already existed: beats can bind one clip with back-to-back word ranges,
+each with its own prompts, references and duration. `split` makes that one
+call. `at_word` is the index of the word that **starts** the new beat, which is
+inserted directly after on the same clip; it must fall strictly inside the
+beat's range, and a beat with no narration or no word manifest is refused.
+Everything written on the original — note, prompts, chosen image, candidates —
+stays on the first half, since guessing which half a sentence was about is
+worse than a blank to be written. On the page, click a pause number in the
+strip under a beat's audio; consecutive beats on one quote are marked
+**continues N**.
+
+A split resolves "the whole clip" to explicit indices, so a later recut that
+adds words does not stretch the halves; `beats_drifted` reports that case as
+for any beat.
 
 Adding items fills the half of the beat the item's **type** implies: an audio
 item becomes a beat that speaks, anything else a beat that is seen.
@@ -1113,6 +1143,11 @@ sentence rather than a mode.
 Attaching is **additive**, under the same reasoning as `batch-tag`: a
 whole-list `PATCH` would discard anything written to the board while the GPU
 was busy, and a batch of three takes minutes.
+
+**The page has the same call.** Each beat has a **Generate 3** button under its
+image prompt. It saves first, sends the prompt exactly as written on the beat,
+shows the job's stage on the button, and when the references land re-renders
+the beat with the cursor put back where it was. It never selects either.
 
 **Nothing copies the generation parameters into the library.** ComfyUI writes
 the prompt and the entire graph into the PNG's text chunks, so the file

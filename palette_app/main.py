@@ -48,7 +48,7 @@ CAPABILITIES = [
     "hit_audio",   # search hits carry audio_stored, so cost is known up front
     "clip_words",  # /api/items/{id}/words serves a clip's indexed manifest
     "words_match_cut",  # the words view uses the cut's window and audio offset
-    "hit_duplicates",   # hits carry duplicate_of: one talk under two sources
+    "hit_duplicates", "split_beat",   # hits carry duplicate_of: one talk under two sources
 ]
 
 
@@ -457,14 +457,19 @@ def _append_candidates(root: Path, board_id: str, beat_id: str,
     """
     from .storyboard import load_board, save_board
 
-    board = load_board(root, board_id)
-    beat = next((b for b in board.get("panels", [])
-                 if b.get("id") == beat_id), None)
-    if beat is None:
-        raise HTTPException(404, f"no beat '{beat_id}' on board '{board_id}'")
-    existing = [c for c in (beat.get("candidates") or []) if c]
-    beat["candidates"] = existing + [i for i in item_ids if i not in existing]
-    save_board(root, board)
+    # Additive is only half of it: without the lock, an autosave landing
+    # between this load and this save is still lost - or this is.
+    with library_lock(root):
+        board = load_board(root, board_id)
+        if board is None:
+            raise HTTPException(404, f"no board '{board_id}'")
+        beat = next((b for b in board.get("panels", [])
+                     if b.get("id") == beat_id), None)
+        if beat is None:
+            raise HTTPException(404, f"no beat '{beat_id}' on board '{board_id}'")
+        existing = [c for c in (beat.get("candidates") or []) if c]
+        beat["candidates"] = existing + [i for i in item_ids if i not in existing]
+        save_board(root, board)
     return {"board_id": board_id, "beat_id": beat_id,
             "candidates": beat["candidates"]}
 
@@ -1006,19 +1011,45 @@ def storyboard_update(bid: str, body: dict = Body(...)):
     out of step with what the user is looking at.
     """
     root = _root()
-    board = _require_board(root, bid)
-    lib = load_library(root)
-    if "name" in body:
-        board["name"] = (body["name"] or "").strip() or board["name"]
-    # Unlike the name, this may legitimately be cleared: an empty description
-    # means nobody has said what the piece is yet, which is a real state and
-    # not a mistake to be defended against.
-    if "description" in body:
-        board["description"] = (body["description"] or "").strip()
-    if "panels" in body:
-        board["panels"] = _clean_panels(lib, body["panels"])
-    save_board(root, board)
+    with library_lock(root):
+        board = _require_board(root, bid)
+        lib = load_library(root)
+        if "name" in body:
+            board["name"] = (body["name"] or "").strip() or board["name"]
+        # Unlike the name, this may legitimately be cleared: an empty
+        # description means nobody has said what the piece is yet, which is a
+        # real state and not a mistake to be defended against.
+        if "description" in body:
+            board["description"] = (body["description"] or "").strip()
+        if "panels" in body:
+            stored = {p.get("id"): p.get("candidates") or []
+                      for p in board.get("panels", [])}
+            cleaned = _clean_panels(lib, body["panels"])
+            _keep_stored_candidates(cleaned, stored)
+            board["panels"] = cleaned
+        save_board(root, board)
     return _board_view(root, lib, board)
+
+
+def _keep_stored_candidates(cleaned: list, stored: dict):
+    """Candidates the server holds survive a PATCH that does not mention them.
+
+    References are attached by a generate job minutes after the page loaded
+    the board. Until the page reloads, every autosave it sends carries that
+    beat's *old* candidate list - so typing a note while the GPU rendered
+    would silently erase the images it had just produced. Nothing in the UI
+    removes a candidate, so a union loses nothing; removing one, if that is
+    ever wanted, belongs in its own additive endpoint, not in a whole-list
+    replace.
+
+    A beat left out of the payload is still deleted: that is a decision the
+    page made, not a list it had not heard about.
+    """
+    for beat in cleaned:
+        held = stored.get(beat["id"]) or []
+        missing = [c for c in held if c and c not in beat["candidates"]]
+        if missing:
+            beat["candidates"] = beat["candidates"] + missing
 
 
 @app.delete("/api/storyboards/{bid}")
@@ -1036,22 +1067,90 @@ def storyboard_delete(bid: str):
 def storyboard_add_panels(bid: str, body: dict = Body(...)):
     """Append library items to the end of the board, in the order given."""
     root = _root()
-    board = _require_board(root, bid)
-    lib = load_library(root)
-    added = 0
-    for iid in body.get("item_ids") or []:
-        item = _find(lib["items"], iid)
-        if not item:
-            continue
-        # What the item *is* decides which half of the beat it fills. Adding a
-        # cut quote should give you a beat that speaks, not a blank picture.
-        if item.get("type") == "audio":
-            board["panels"].append(new_panel(narration={"item_id": iid}))
-        else:
-            board["panels"].append(new_panel(iid))
-        added += 1
-    save_board(root, board)
+    with library_lock(root):
+        board = _require_board(root, bid)
+        lib = load_library(root)
+        added = 0
+        for iid in body.get("item_ids") or []:
+            item = _find(lib["items"], iid)
+            if not item:
+                continue
+            # What the item *is* decides which half of the beat it fills.
+            # Adding a cut quote should give you a beat that speaks, not a
+            # blank picture.
+            if item.get("type") == "audio":
+                board["panels"].append(new_panel(narration={"item_id": iid}))
+            else:
+                board["panels"].append(new_panel(iid))
+            added += 1
+        save_board(root, board)
     return {**_board_view(root, lib, board), "added": added}
+
+
+@app.post("/api/storyboards/{bid}/panels/{pid}/split")
+def storyboard_split_beat(bid: str, pid: str, body: dict = Body(...)):
+    """Split a speaking beat in two at a word: `{"at_word": N}`.
+
+    A long quote often needs more than one picture - a twelve-second beat is
+    several shots - and the shape for that already existed: beats can bind
+    the same clip with back-to-back word ranges, and each gets its own
+    prompt, references and duration. The page could already split one, but
+    only by rewriting the whole panel list from the browser - which a session
+    in conversation cannot do, and which any stale autosave could undo.
+
+    Word N starts the new beat, which goes directly after this one on the
+    same clip. Everything written on the original - note, prompts, chosen
+    image, candidates - stays on the first half: it was written about the
+    moment as it was, and guessing which half a sentence belongs to would be
+    worse than leaving the second half blank to be written.
+
+    A split resolves the beat's bounds to explicit indices. A beat that was
+    "the whole clip" becomes words lo-hi, which a later recut that adds words
+    would not stretch - `beats_drifted` reports that case, as for any beat.
+    """
+    at = _opt_int(body.get("at_word"))
+    if at is None:
+        raise HTTPException(
+            400, "at_word is required: the index of the word that starts the "
+                 "new beat")
+    root = _root()
+    with library_lock(root):
+        board = _require_board(root, bid)
+        lib = load_library(root)
+        panels = board.get("panels", [])
+        idx = next((i for i, p in enumerate(panels) if p.get("id") == pid),
+                   None)
+        if idx is None:
+            raise HTTPException(404, f"no beat '{pid}' on board '{bid}'")
+        beat = panels[idx]
+        stored = beat.get("narration") or {}
+        clip = (_find(lib["items"], stored["item_id"])
+                if stored.get("item_id") else None)
+        if not clip:
+            raise HTTPException(
+                400, "only a beat that speaks can be split - it is split on "
+                     "its words, and this one has no narration clip")
+        bound = narration_bind(root / "media", clip, stored.get("word_start"),
+                               stored.get("word_end"))
+        if bound["precision"] != "word":
+            raise HTTPException(
+                400, "this clip has no word manifest, so there are no words to "
+                     "split between. Clips from `qs cut` have one; `qs pull` "
+                     "clips do not")
+        lo, hi = bound["word_start"], bound["word_end"]
+        if not lo < at <= hi:
+            raise HTTPException(
+                400, f"at_word {at} is not inside this beat: it covers words "
+                     f"{lo}-{hi}, so a split must start the new beat at "
+                     f"{lo + 1}-{hi}")
+        beat["narration"] = {"item_id": clip["id"], "word_start": lo,
+                             "word_end": at - 1}
+        second = new_panel(narration={"item_id": clip["id"],
+                                      "word_start": at, "word_end": hi})
+        panels.insert(idx + 1, second)
+        save_board(root, board)
+    return {**_board_view(root, lib, board),
+            "split": {"first": pid, "second": second["id"]}}
 
 
 @app.post("/api/storyboards/{bid}/render")
