@@ -829,6 +829,58 @@ const Storyboard = {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // ── Viewing a render ──────────────────────────────────────────────────────
+
+  lastRender: null,
+
+  showRender(result = this.lastRender) {
+    if (!result) return;
+    const url = `/api/exports/${encodeURIComponent(result.filename)}`;
+    const img = document.getElementById('sb-viewer-img');
+    img.src = url;
+    // A button rather than a link: .btn sets no colours of its own, so an <a>
+    // with it rendered as the browser default blue underline on the dark bar,
+    // while the buttons beside it got the default button face.
+    this.renderUrl = url;
+    document.getElementById('sb-viewer-meta').innerHTML =
+      `<strong>${esc(result.filename)}</strong>
+       <span>${esc(result.grid)} · ${result.width}×${result.height} · ${fmtBytes(result.size_bytes)}</span>
+       <span class="sb-viewer-path">saved in the library's exports folder</span>`;
+    const missing = result.missing || [];
+    const warn = document.getElementById('sb-viewer-warn');
+    warn.classList.toggle('hidden', !missing.length);
+    warn.textContent = missing.length
+      ? `Panel${missing.length === 1 ? '' : 's'} ${missing.join(', ')} had no image file and rendered as a placeholder.`
+      : '';
+    this.setRenderZoom(false);
+    document.getElementById('sb-viewer').classList.remove('hidden');
+  },
+
+  renderUrl: null,
+
+  openRenderTab() {
+    if (this.renderUrl) window.open(this.renderUrl, "_blank", "noopener");
+  },
+
+  // Close on the Close button, Esc, or a click on the dark backdrop - but not
+  // on a click inside the bar or on the image itself.
+  closeRender(event) {
+    if (event && event.target.id !== 'sb-viewer' && event.target.id !== 'sb-viewer-stage') return;
+    document.getElementById('sb-viewer').classList.add('hidden');
+  },
+
+  // Fitted to the window by default, so a whole board is visible at once;
+  // actual size for reading captions, scrolling inside the stage.
+  toggleRenderZoom() {
+    const stage = document.getElementById('sb-viewer-stage');
+    this.setRenderZoom(!stage.classList.contains('actual'));
+  },
+
+  setRenderZoom(actual) {
+    document.getElementById('sb-viewer-stage').classList.toggle('actual', actual);
+    document.getElementById('sb-viewer-zoom').textContent = actual ? 'Fit to window' : 'Actual size';
+  },
+
   async render() {
     if (!this.board) return;
     if (this.board.panels.length === 0) { toast('Board has no panels', 'error'); return; }
@@ -853,9 +905,14 @@ const Storyboard = {
       toast(`${result.panels} panels → ${result.grid} PNG`
             + (missing ? ` (${missing} image${missing === 1 ? '' : 's'} missing)` : ''),
             missing ? 'error' : 'success');
+      this.lastRender = result;
+      this.showRender(result);
       document.getElementById('sb-render-result').innerHTML = `
         <div class="section-card">
-          <h3>${esc(result.filename)} — ${result.grid}, ${result.width}×${result.height}, ${fmtBytes(result.size_bytes)}</h3>
+          <h3 style="display:flex;align-items:center;gap:10px">
+            <span style="flex:1">${esc(result.filename)} — ${result.grid}, ${result.width}×${result.height}, ${fmtBytes(result.size_bytes)}</span>
+            <button class="btn btn-sm" onclick="Storyboard.showRender()">View</button>
+          </h3>
           ${missing ? `<div style="color:var(--orange);font-size:12px;margin-bottom:8px">
             Panel${missing === 1 ? '' : 's'} ${result.missing.join(', ')} had no image file and rendered as a placeholder.</div>` : ''}
           <a href="/api/exports/${encodeURIComponent(result.filename)}" target="_blank">
@@ -871,6 +928,13 @@ const Storyboard = {
     }
   },
 };
+
+document.addEventListener('keydown', e => {
+  const viewer = document.getElementById('sb-viewer');
+  if (e.key === 'Escape' && viewer && !viewer.classList.contains('hidden')) {
+    viewer.classList.add('hidden');
+  }
+});
 
 document.addEventListener('DOMContentLoaded', () => {
   ['sb-cols', 'sb-tile-width', 'sb-padding', 'sb-aspect', 'sb-max-width'].forEach(id => {

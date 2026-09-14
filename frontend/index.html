@@ -488,6 +488,23 @@
 
 <div id="toast-container"></div>
 
+<!-- A rendered storyboard, shown the moment it exists. Before this the image
+     was appended below the Render card, out of view, with a toast as the only
+     sign - so a render that worked looked like a click that did nothing. -->
+<div id="sb-viewer" class="sb-viewer hidden" onclick="Storyboard.closeRender(event)">
+  <div class="sb-viewer-bar">
+    <div class="sb-viewer-meta" id="sb-viewer-meta"></div>
+    <span style="flex:1"></span>
+    <button class="btn btn-sm" id="sb-viewer-zoom" onclick="Storyboard.toggleRenderZoom()">Actual size</button>
+    <button class="btn btn-sm" id="sb-viewer-open" onclick="Storyboard.openRenderTab()">Open in new tab</button>
+    <button class="btn btn-sm" onclick="Storyboard.closeRender()">Close ✕</button>
+  </div>
+  <div class="sb-viewer-warn hidden" id="sb-viewer-warn"></div>
+  <div class="sb-viewer-stage" id="sb-viewer-stage">
+    <img id="sb-viewer-img" alt="Rendered storyboard" onclick="Storyboard.toggleRenderZoom()">
+  </div>
+</div>
+
 <script src="/static/js/app.js"></script>
 <script src="/static/js/import.js"></script>
 <script src="/static/js/clip.js"></script>
