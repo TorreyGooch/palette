@@ -927,7 +927,8 @@ video {
 .sb-thumb {
   background: #000;
   border-radius: 4px;
-  aspect-ratio: 16 / 9;
+  /* The board's own frame shape, set by Storyboard.applyAspect. */
+  aspect-ratio: var(--sb-aspect, 16 / 9);
   display: flex;
   align-items: center;
   justify-content: center;

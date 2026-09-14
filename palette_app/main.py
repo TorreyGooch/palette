@@ -970,7 +970,32 @@ def beat_text(panel: dict) -> str:
 def _board_view(root: Path, lib: dict, board: dict) -> dict:
     """A board with every beat enriched, plus where each one falls in time."""
     beats = [_panel_view(root, lib, p) for p in board.get("panels", [])]
-    return {**board, "panels": beats, "timeline": narration_layout(beats)}
+    # A board saved before `aspect` existed rendered as 16:9, so that is what
+    # its absence means - the same default the renderer always used.
+    return {**board, "aspect": board.get("aspect") or DEFAULT_ASPECT,
+            "panels": beats, "timeline": narration_layout(beats)}
+
+
+# Narrower than any real frame or wider than any real frame is a typo, not a
+# format: 0.2 is taller than 1:5, 5 is wider than 5:1.
+ASPECT_MIN, ASPECT_MAX = 0.2, 5.0
+
+
+def _clean_aspect(value):
+    """A board's frame shape as width / height, or None to use the default."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise HTTPException(400, "aspect must be a number: width / height")
+    try:
+        aspect = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "aspect must be a number: width / height, "
+                                 "e.g. 0.5625 for 9:16") from None
+    if not ASPECT_MIN <= aspect <= ASPECT_MAX:
+        raise HTTPException(400, f"aspect {aspect} is not a frame shape: it "
+                                 f"must be between {ASPECT_MIN} and {ASPECT_MAX}")
+    return aspect
 
 
 def _require_board(root: Path, bid: str) -> dict:
@@ -1021,6 +1046,15 @@ def storyboard_update(bid: str, body: dict = Body(...)):
         # real state and not a mistake to be defended against.
         if "description" in body:
             board["description"] = (body["description"] or "").strip()
+        # The frame shape of the piece, read by the page and by the render.
+        # Cleared rather than stored as the default, so "never chosen" stays
+        # distinguishable from "chose 16:9".
+        if "aspect" in body:
+            aspect = _clean_aspect(body["aspect"])
+            if aspect is None:
+                board.pop("aspect", None)
+            else:
+                board["aspect"] = aspect
         if "panels" in body:
             stored = {p.get("id"): p.get("candidates") or []
                       for p in board.get("panels", [])}
@@ -1196,7 +1230,9 @@ def storyboard_render(bid: str, body: dict = Body(...)):
 
     # An explicit empty title drops the header; anything else names the board.
     title = body.get("title", board.get("name")) or None
-    aspect = body.get("aspect")
+    # The board's own shape unless this render asks for another: a one-off
+    # 16:9 export of a vertical board is a legitimate request.
+    aspect = body.get("aspect") or board.get("aspect")
     result = render_storyboard(
         panels, out_path,
         title=title,

@@ -922,6 +922,7 @@ and the pictures attach to it.
 |---|---|---|
 | board | `name` | what to call it |
 | board | `description` | the whole video in plain language |
+| board | `aspect` | the frame shape, width / height (`0.5625` is 9:16). The page draws panels in it and a render uses it unless the request names another. Absent means 16:9, which is what every older board rendered as |
 | board | *(a whole-video prompt)* | **not built** — waiting on the video model that will consume it |
 | beat | `note` | why this beat is here — the audit trail |
 | beat | `image_prompt` | what is in this shot, and how it is shot |

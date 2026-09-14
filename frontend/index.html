@@ -365,6 +365,16 @@
                 <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
                   <input type="text" id="sb-name" placeholder="Board name" style="flex:1"
                          oninput="Storyboard.renameBoard(this.value)">
+                  <select id="sb-aspect" title="The frame shape of this piece. Saved on the board; the panels below and the render both use it."
+                          onchange="Storyboard.setAspect(this.value)" style="width:auto">
+                    <option value="1.7777777778">16:9 — widescreen</option>
+                    <option value="2.39">2.39:1 — scope</option>
+                    <option value="1.5">3:2</option>
+                    <option value="1.3333333333">4:3</option>
+                    <option value="1">1:1 — square</option>
+                    <option value="0.75">3:4 — vertical</option>
+                    <option value="0.5625">9:16 — vertical</option>
+                  </select>
                   <span style="font-size:12px;color:var(--muted)" id="sb-count"></span>
                   <button class="btn btn-sm btn-danger" onclick="Storyboard.deleteBoard()">Delete board</button>
                 </div>
@@ -399,17 +409,6 @@
                   <div class="form-group" style="margin:0">
                     <label>Panel width (px)</label>
                     <input type="number" id="sb-tile-width" value="360" min="64">
-                  </div>
-                  <div class="form-group" style="margin:0">
-                    <label>Panel aspect</label>
-                    <select id="sb-aspect">
-                      <option value="1.7777777778">16:9 — widescreen</option>
-                      <option value="2.39">2.39:1 — scope</option>
-                      <option value="1.5">3:2</option>
-                      <option value="1.3333333333">4:3</option>
-                      <option value="1">1:1 — square</option>
-                      <option value="0.5625">9:16 — vertical</option>
-                    </select>
                   </div>
                   <div class="form-group" style="margin:0">
                     <label>Padding (px)</label>

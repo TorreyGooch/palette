@@ -94,7 +94,7 @@ const Storyboard = {
       const updated = await api(`/api/storyboards/${encodeURIComponent(this.board.id)}`, {
         method: 'PATCH',
         body: { name: this.board.name, description: this.board.description || '',
-                panels: this.board.panels },
+                aspect: this.board.aspect ?? null, panels: this.board.panels },
       });
       this.board = updated;
       this.setSaveState('saved');
@@ -338,6 +338,7 @@ const Storyboard = {
     editor.classList.toggle('hidden', !this.board);
     if (!this.board) return;
     document.getElementById('sb-name').value = this.board.name || '';
+    this.applyAspect();
     const desc = document.getElementById('sb-description');
     desc.value = this.board.description || '';
     this.fit(desc);
@@ -346,6 +347,33 @@ const Storyboard = {
     this.renderPicker();
     this.renderPanels();
     document.getElementById('sb-render-result').innerHTML = '';
+  },
+
+  // The frame shape belongs to the piece, so it is saved on the board and the
+  // panels are drawn in it. It used to be a render-only dropdown that reset on
+  // every load, so a vertical video was worked on in sideways 16:9 boxes.
+  setAspect(value) {
+    if (!this.board) return;
+    const n = parseFloat(value);
+    this.board.aspect = isNaN(n) ? null : n;
+    this.applyAspect();
+    this.renderEstimate();
+    this.queueSave();
+  },
+
+  applyAspect() {
+    const aspect = this.board?.aspect || (16 / 9);
+    const panels = document.getElementById('sb-panels');
+    if (panels) panels.style.setProperty('--sb-aspect', String(aspect));
+    const select = document.getElementById('sb-aspect');
+    if (!select) return;
+    // Pick the listed shape this is; a value set through the API that is not
+    // in the list gets its own entry rather than silently showing another.
+    const match = [...select.options].find(o => Math.abs(parseFloat(o.value) - aspect) < 0.005);
+    if (match) { select.value = match.value; return; }
+    const custom = new Option(`${aspect.toFixed(3)} — set on this board`, String(aspect));
+    select.add(custom);
+    select.value = custom.value;
   },
 
   // What the piece is. Not a beat's business: a beat only knows its own frame.
