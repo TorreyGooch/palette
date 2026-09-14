@@ -338,7 +338,9 @@ const Storyboard = {
     editor.classList.toggle('hidden', !this.board);
     if (!this.board) return;
     document.getElementById('sb-name').value = this.board.name || '';
-    document.getElementById('sb-description').value = this.board.description || '';
+    const desc = document.getElementById('sb-description');
+    desc.value = this.board.description || '';
+    this.fit(desc);
     this.setSaveState('saved');
     this.pickerOpen = false;
     this.renderPicker();
@@ -424,6 +426,32 @@ const Storyboard = {
             p.frame == null ? '—' : 'f' + p.frame}</span>
         </div>
       </div>`).join('');
+    this.fitAll(el);
+  },
+
+  // Every text on a board is shown whole. A fixed-height box that clips its
+  // own contents made reading a board a chore: five beats with three written
+  // fields each was fifteen drag-to-resize gestures just to see what was
+  // there. So a box is exactly as tall as its text, on render, on every
+  // keystroke, and again when the window width changes the wrapping.
+  fit(ta) {
+    // An empty box keeps its `rows` height. Measuring one sizes it to its
+    // wrapped *placeholder* - an empty board description came out 1294px tall
+    // - and there is no text in it to show anyway.
+    if (!ta.value) { ta.style.height = ''; return; }
+    // No width yet means no wrapping to measure; the observer below refits.
+    if (!ta.clientWidth) return;
+    const cs = getComputedStyle(ta);
+    ta.style.height = 'auto';
+    const extra = cs.boxSizing === 'border-box'
+      ? ta.offsetHeight - ta.clientHeight
+      : -(parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom));
+    // +1: line-height is fractional (12px x 1.45), scrollHeight is rounded.
+    ta.style.height = `${Math.ceil(ta.scrollHeight + extra) + 1}px`;
+  },
+
+  fitAll(root = document) {
+    root.querySelectorAll(FIT_SELECTOR).forEach(ta => this.fit(ta));
   },
 
   // A beat can be seen, heard, or merely asked for, and the three failure
@@ -698,4 +726,28 @@ document.addEventListener('DOMContentLoaded', () => {
     Storyboard.importFiles(e.target.files);
     e.target.value = '';
   });
+});
+
+// Auto-grow is wired once, by delegation, rather than into each template's
+// oninput: panels are re-rendered wholesale and a listener per textarea would
+// have to be re-attached every time.
+const FIT_SELECTOR = '.sb-note, .sb-prompt, .sb-board-desc';
+document.addEventListener('input', e => {
+  if (e.target.matches?.(FIT_SELECTOR)) Storyboard.fit(e.target);
+});
+// Wrapping depends on width, and width changes for reasons no event names:
+// the editor being un-hidden, the sidebar, the window. So watch the width
+// itself. Height is ignored on purpose - fitting changes the editor's height,
+// and reacting to that would loop.
+let fitWidth = 0;
+const fitObserver = new ResizeObserver(entries => {
+  const w = Math.round(entries[0].contentRect.width);
+  if (w && w !== fitWidth) {
+    fitWidth = w;
+    Storyboard.fitAll();
+  }
+});
+document.addEventListener('DOMContentLoaded', () => {
+  const editor = document.getElementById('sb-editor');
+  if (editor) fitObserver.observe(editor);
 });

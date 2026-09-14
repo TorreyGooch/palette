@@ -1177,3 +1177,10 @@ video {
   margin-bottom: 12px;
 }
 .sb-board-desc:focus { outline: none; border-color: var(--orange); }
+
+/* Sized to their text by Storyboard.fit, so there is nothing to drag open and
+   never a hidden tail to scroll inside a box. */
+.sb-note, .sb-prompt, .sb-board-desc {
+  resize: none;
+  overflow-y: hidden;
+}
