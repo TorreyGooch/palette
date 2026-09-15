@@ -1,0 +1,6 @@
+
+# Shell scripts run under bash on every machine, including Windows (Git Bash).
+# A CRLF checkout breaks them on the first line - and hooks/guard-main.sh
+# failing makes pre-push refuse every push. Keep them LF in every clone.
+hooks/* text eol=lf
+*.sh text eol=lf
