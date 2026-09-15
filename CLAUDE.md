@@ -793,9 +793,36 @@ where it came from:
 "audio_provenance": {
   "linked_from": "dwarkesh/rss-da97217b6203",
   "offset_s": 0.0,
-  "alignment": "duration_exact"      // or "probed_constant"
+  "alignment": "duration_exact",     // or "probed_constant"
+  "matched_on": "title"              // or "date_duration"
 }
 ```
+
+**How the pair was made is recorded, because the evidence is not equal.**
+`link-audio` tries titles first. Dwarkesh words the same conversation
+differently on each platform - "This might be the clearest warning shot..."
+upload, "Inside the OpenAI agent swarm..." feed entry - and 10 of 19 unlinked
+episodes never title-matched, so every cut from them fetched ~50 MB from
+YouTube while the audio sat on disk. Where no title matches, a pair is made on
+**same `upload_date`, duration within tolerance, and exactly one candidate in
+each direction**: this episode has one such feed episode, that feed episode is
+claimed by no other upload and lends its audio to no one yet, and trailing
+series numbers do not disagree. Anything unsure is reported as `ambiguous`,
+not folded into `unmatched`, and the dry run lists every `date_duration` pair
+with both titles side by side so it can be read before `--apply`.
+
+A title can also find the **wrong conversation**: a guest's 2026 upload
+title-matched their 2023 feed episode, 139 s away, and left in `differs` the
+offset probe would have measured a shift between two different recordings. A
+title match on a different day therefore gives way to a unique same-day,
+same-length episode. A same-day title match that differs in length stays in
+`differs` - that is a real pre-roll, and it is the probe's to measure.
+
+`matched_on` lets a later reader weigh a date-and-length pair below a
+title-confirmed one. It is absent on links made before 2026-09-15, all of which
+came through titles or the offset probe. The alignment guard in `cut` still
+refuses a wrong pair, but only once a cut is attempted, which is why the rule
+refuses first.
 
 **The two versions do not always share a timeline.** Measured across all 125
 Dwarkesh episodes: 53 match to the second, 55 sit at a constant shift (mostly

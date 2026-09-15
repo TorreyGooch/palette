@@ -63,6 +63,11 @@ A source is onboarded when **all** of these hold:
    may be incomplete, and that must be said rather than discovered later.
 5. Where a podcast feed carries the same conversation, audio is linked — with
    a **measured** offset, never one inferred from a duration difference.
+   `link-audio` pairs by title, and where titles differ by same upload day +
+   duration within tolerance + one candidate each way. **Read
+   `date_duration_pairs` in the dry run before `--apply`**: both titles are
+   listed, and each should visibly be the same guest. Anything under
+   `ambiguous_episodes` was refused on purpose; do not hand-link it.
 
 ## Not getting the machine flagged — read this before any ingest
 

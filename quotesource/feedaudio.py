@@ -182,6 +182,50 @@ def match_by_title(title: str, candidates, min_ratio: float = 0.60):
     return (best, score) if best and score >= min_ratio else (None, score)
 
 
+def _day(meta: dict) -> str | None:
+    """The upload day as YYYYMMDD, or None when it is not known.
+
+    Both ingest paths already write that form - YouTube's own `upload_date`,
+    and a feed's `published_parsed` formatted with %Y%m%d - so this only
+    guards against a missing or malformed value, never reformats a real one.
+    """
+    digits = re.sub(r"\D", "", str(meta.get("upload_date") or ""))
+    return digits[:8] if len(digits) >= 8 else None
+
+
+def match_by_date_and_duration(meta: dict, candidates, tolerance: float = 1.0):
+    """Every (dir, meta) published the same day with the same length.
+
+    The fallback for a show that words its two titles differently: Dwarkesh
+    titles an upload "This might be the clearest warning shot..." and the
+    same conversation's feed entry "Inside the OpenAI agent swarm...". Same
+    guest, same day, same length to the second - and no title ratio will
+    ever say so.
+
+    Returns *all* candidates rather than the best one, because the caller's
+    rule is uniqueness and it cannot check that from a single answer.
+    Unknown day or duration matches nothing: with nothing to confirm the
+    guess, there is no guess. Disagreeing series numbers never match either,
+    for the same reason `match_by_title` refuses them - "discussion 2" and
+    "discussion 4" are different recordings however alike their lengths.
+    """
+    day, dur = _day(meta), meta.get("duration")
+    if not day or not dur:
+        return []
+    number = series_number(meta.get("title"))
+    out = []
+    for ep_dir, other in candidates:
+        if _day(other) != day or not other.get("duration"):
+            continue
+        if abs(dur - other["duration"]) > tolerance:
+            continue
+        theirs = series_number(other.get("title"))
+        if number is not None and theirs is not None and number != theirs:
+            continue
+        out.append((ep_dir, other))
+    return out
+
+
 def plan_links(caption_source: str, feed_source: str, tolerance: float = 1.0):
     """Which captioned episodes can safely borrow feed audio.
 
@@ -189,26 +233,91 @@ def plan_links(caption_source: str, feed_source: str, tolerance: float = 1.0):
     they do not: a feed carrying a pre-roll the upload lacks reports a longer
     episode. Pairs that differ by more than `tolerance` are left for the
     offset probe, which measures the shift instead of assuming none.
+
+    A title match is tried first. Where there is none, a pair is still made
+    on **same upload day, duration within tolerance, and exactly one
+    candidate in each direction**: this episode has one such feed episode,
+    and that feed episode is claimed by no other captioned episode and lends
+    its audio to no one yet. Measured on dwarkesh_yt it pairs 10 of 19
+    unlinked episodes, all visibly the same guest; no date window is needed.
+
+    Uniqueness is kept even where nothing is ambiguous today. Two same-day
+    uploads of similar length is plausible, and a wrong pairing is a fluent
+    clip of the wrong sentence - the alignment guard in `cut` would refuse
+    it, but only after a cut was attempted. Everything refused for being
+    ambiguous is reported as such, not folded into `unmatched`, so it can be
+    looked at rather than presumed absent.
     """
+    from collections import Counter
+
     feed = [(d, m) for d, m in episodes(feed_source) if stored_audio(d)]
-    plan = {"link": [], "differs": [], "unmatched": [], "already": []}
+    plan = {"link": [], "differs": [], "unmatched": [], "already": [],
+            "ambiguous": []}
+    lent = set()
+    fallback = []
     for ep_dir, meta in episodes(caption_source):
-        if stored_audio(ep_dir) or meta.get("audio_provenance"):
+        prov = meta.get("audio_provenance") or {}
+        if prov.get("linked_from"):
+            lent.add(prov["linked_from"])
+        if stored_audio(ep_dir) or prov:
             plan["already"].append(ep_dir.name)
             continue
         match, score = match_by_title(meta.get("title"), feed)
         if not match:
-            plan["unmatched"].append(ep_dir.name)
+            same = match_by_date_and_duration(meta, feed, tolerance)
+            if len(same) == 1:
+                fallback.append((ep_dir, meta, same[0], score))
+            elif same:
+                plan["ambiguous"].append(ep_dir.name)
+            else:
+                plan["unmatched"].append(ep_dir.name)
             continue
         feed_dir, feed_meta = match
         a, b = meta.get("duration") or 0, feed_meta.get("duration") or 0
         delta = (a - b) if (a and b) else None
         row = {"episode_id": ep_dir.name, "delta": delta, "title_score": round(score, 3),
+               "matched_on": "title", "caption_title": meta.get("title"),
                "caption_dir": ep_dir, "feed_dir": feed_dir, "feed_meta": feed_meta}
         if delta is not None and abs(delta) <= tolerance:
             plan["link"].append(row)
-        else:
-            plan["differs"].append(row)
+            continue
+        # A title can find the wrong conversation. A guest who has been on
+        # twice shares most of a title with themselves: Grant Sanderson's 2026
+        # upload title-matched his 2023 feed episode at 0.647 - three years
+        # and 139s away - while the real pair sat beside it, same day, same
+        # length. Left in `differs`, the offset probe would have gone looking
+        # for a shift between two different recordings.
+        #
+        # So a title match on a *different day* gives way to a unique
+        # same-day, same-length episode. A title match on the same day stays
+        # in `differs`: that is the shape of a real pre-roll, and it is the
+        # probe's to measure, not this function's to reassign.
+        if _day(feed_meta) != _day(meta):
+            same = [c for c in match_by_date_and_duration(meta, feed, tolerance)
+                    if c[0] != feed_dir]
+            if len(same) == 1:
+                fallback.append((ep_dir, meta, same[0], score))
+                continue
+        plan["differs"].append(row)
+
+    # Unique in the other direction too: a feed episode picked by two
+    # captioned episodes cannot be both of them, and one already lending its
+    # audio - earlier, or to a title match in this same run - is spoken for.
+    def key(feed_dir):
+        return f"{feed_dir.parent.name}/{feed_dir.name}"
+
+    claims = Counter(key(f[0]) for _, _, f, _ in fallback)
+    taken = lent | {key(row["feed_dir"]) for row in plan["link"]}
+    for ep_dir, meta, (feed_dir, feed_meta), score in fallback:
+        if claims[key(feed_dir)] > 1 or key(feed_dir) in taken:
+            plan["ambiguous"].append(ep_dir.name)
+            continue
+        plan["link"].append({
+            "episode_id": ep_dir.name,
+            "delta": (meta.get("duration") or 0) - (feed_meta.get("duration") or 0),
+            "title_score": round(score, 3), "matched_on": "date_duration",
+            "caption_title": meta.get("title"),
+            "caption_dir": ep_dir, "feed_dir": feed_dir, "feed_meta": feed_meta})
     return plan
 
 
@@ -243,17 +352,35 @@ def link(caption_dir: Path, feed_dir: Path, feed_meta: dict,
 def link_matching(caption_source: str, feed_source: str,
                   tolerance: float = 1.0, apply: bool = False) -> dict:
     plan = plan_links(caption_source, feed_source, tolerance)
+    by_kind = {"title": 0, "date_duration": 0}
+    for row in plan["link"]:
+        by_kind[row["matched_on"]] += 1
     result = {
         "caption_source": caption_source, "feed_source": feed_source,
         "tolerance": tolerance,
         "linkable": len(plan["link"]), "differs": len(plan["differs"]),
         "unmatched": len(plan["unmatched"]), "already": len(plan["already"]),
+        "ambiguous": len(plan["ambiguous"]),
+        "matched_on": by_kind,
         "linked": 0,
         "deltas": sorted(r["delta"] for r in plan["differs"]
                          if r["delta"] is not None),
+        # The weaker evidence, laid out to be read before --apply: both
+        # titles side by side are what let a person see it is one guest.
+        "date_duration_pairs": [
+            {"episode_id": r["episode_id"], "feed_episode": r["feed_dir"].name,
+             "caption_title": r["caption_title"],
+             "feed_title": r["feed_meta"].get("title"),
+             "upload_date": r["feed_meta"].get("upload_date"),
+             "delta": r["delta"]}
+            for r in plan["link"] if r["matched_on"] == "date_duration"],
+        "ambiguous_episodes": plan["ambiguous"],
     }
     if apply:
         for row in plan["link"]:
-            link(row["caption_dir"], row["feed_dir"], row["feed_meta"])
+            # How the pair was made, so a reader can weigh a date-and-length
+            # match below a title-confirmed one.
+            link(row["caption_dir"], row["feed_dir"], row["feed_meta"],
+                 extra={"matched_on": row["matched_on"]})
             result["linked"] += 1
     return result
