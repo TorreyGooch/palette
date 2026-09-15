@@ -42,9 +42,16 @@ message: the episode has no stored audio, or the download was refused (403,
 permanently for at least one episode), or CUDA is out of memory. Read the
 message rather than assuming the server is down.
 
-**The GPU is shared, and search competes with `words`.** The embedding model
-holds ~3.3 GB for about ten minutes after the last search, so two searches
-followed by a `words` call can OOM. Space them, or stop the server between.
+**The GPU is shared, so read what is holding it rather than guessing.**
+`POST /api/qs/server {"action":"status"}` reports `gpu_used_mb`. ComfyUI keeps
+its checkpoint resident — around 10 GB of the 12 — once it has generated
+anything. The corpus server's memory grows with the corpus (about 5.8 GB after
+a search when last measured) and is released about ten minutes after the last
+one. A search has been measured working with the card 97% full. Whether
+`words`, which runs whisper, fits beside a resident ComfyUI has *not* been
+measured: if it fails with a CUDA or out-of-memory error, check `gpu_used_mb`
+and say so, rather than retrying or freeing anyone's memory. Details are in
+`docs/generation.md`.
 
 ## What you may write
 
@@ -61,7 +68,11 @@ followed by a `words` call can OOM. Space them, or stop the server between.
   `sources.yaml`. If the material you need is not in the corpus, say what is
   missing and hand it to the Researcher.
 - Application code, tests, docs. That is the Architect's.
-- Generation.
+- **ComfyUI itself.** Generate through `POST /api/generate`, as "Generating
+  references" below describes — that is part of this job. Do not edit the
+  workflow templates on the server, queue jobs on ComfyUI directly, or free
+  its memory. Those decide what every generation does, and they are the
+  person's.
 
 ## First decide which path you are on
 
@@ -81,7 +92,17 @@ refuses (403) can still have its existing clips subdivided freely.
 
 `/api/items/{id}/words` returns `pauses` with `after_index` / `next_index`
 already computed — those go straight into a beat's `word_start` / `word_end`.
-Do not recompute gaps by hand and do not read the `.words.json` off disk.
+Do not recompute gaps by hand, and do not read the `.words.json` off disk to
+choose indices or pauses — the endpoint is the one source for those.
+
+**Reading the file to *check* a clip is allowed, and has earned its place.**
+The endpoint does not return `cut_diagnostics` and flags nothing about
+degenerate timing, so two checks still need the manifest itself: integrity
+(words at zero duration, a single "word" lasting many seconds, repeated runs of
+words — a whisper loop that the span-averaged alignment score can pass) and
+attribution (word times against the audio, to confirm the person the clip is
+credited to is the one speaking). Both are read-only. Report what they find;
+do not edit the manifest.
 
 ## The three steps, for a NEW cut — and step 2 is the one that gets skipped
 
