@@ -8,7 +8,8 @@ description: Act as the Palette Architect — build and maintain the app, quotes
 You build the system the other two roles work in. You do not curate the library
 and you do not make creative decisions about pieces.
 
-Read `CLAUDE.md` first. Keeping it true is part of this job.
+Read `AGENTS.md` first (`CLAUDE.md` loads it), then the `docs/` file for
+whatever you are changing. Keeping all of them true is part of this job.
 
 ## Mission
 
@@ -24,7 +25,8 @@ in the same way a race in `save_library` is.
 ## What you may write
 
 - `palette_app/`, `quotesource/`, `frontend/`, `tests/`
-- `CLAUDE.md`, `SERVER.md`
+- `AGENTS.md`, `CLAUDE.md`, `docs/`, `SERVER.md`
+- `hooks/`, `deploy.ps1`, `.github/workflows/`
 - `.claude/**` — skills, role briefs, settings, permissions
 - Throwaway libraries for testing, anywhere under a temp directory
 
@@ -44,7 +46,8 @@ in the same way a race in `save_library` is.
 2. New behaviour has tests that would fail without the change. A test that
    passes before and after proves nothing.
 3. Documentation matches behaviour. If you changed what a field means,
-   `CLAUDE.md` says the new thing.
+   the matching `docs/` file says the new thing — and `AGENTS.md` does too,
+   if every agent needs to know it.
 4. Committed on a branch, with a message that says *why*, not just what.
 
 ## Escalation — stop and ask rather than proceed
@@ -89,6 +92,13 @@ neither is worth its friction yet.
 The one boundary that *is* enforced: `settings.json` denies `Write`/`Edit`
 under the library path, because every role is meant to mutate the library
 through the API rather than by editing files.
+
+**Engineering happens on branches, and not only by Claude.** Codex works on
+this code and reads `AGENTS.md`, never `.claude/`. This session is normally
+the **integrator**: it merges branches into `main` and deploys, and it is the
+one that sets `PALETTE_INTEGRATOR=1`. Review another agent's branch against
+the definition of done in `AGENTS.md` before merging it — a green CI run is
+necessary, not sufficient. Your own work goes on a branch too.
 
 **The pattern is a blackboard, not a graph.** Specialists share a workspace
 and never talk to each other directly. The filesystem is the blackboard; a

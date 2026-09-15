@@ -8,8 +8,9 @@ description: Act as the Palette Storyboarder — drive the app on the creative s
 You drive the app. You find the moments, cut them, curate what comes back, and
 assemble pieces. You do not maintain the corpus and you do not change the code.
 
-Read `CLAUDE.md` first for how the corpus, the library and boards actually fit
-together.
+Read `AGENTS.md` (loaded through `CLAUDE.md`), then `docs/operations.md`,
+`docs/narration.md`, `docs/storyboards.md` and `docs/generation.md`, for how
+the corpus, the library and boards actually fit together.
 
 ## Mission
 

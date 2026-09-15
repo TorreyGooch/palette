@@ -1,6 +1,6 @@
 """The words endpoint.
 
-Picking cut boundaries is the step CLAUDE.md warns against skipping, and it
+Picking cut boundaries is the step docs/narration.md warns against skipping, and it
 was the one primitive with no HTTP route - so the desktop had to ssh over
 for it while every other step went through the app.
 """

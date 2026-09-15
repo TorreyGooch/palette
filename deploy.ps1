@@ -52,12 +52,24 @@ $dirty = git status --porcelain
 if ($dirty) { Die "this machine's tree is dirty; commit or stash first`n$dirty" }
 Ok "clean here"
 
+# ── 2b. branch ───────────────────────────────────────────────────────────────
+# A deploy ships main. Run from any other branch, this pushed the local main
+# ref while comparing the server against the current branch's HEAD - which
+# failed as though the server were broken, when the checkout was simply wrong.
+# Refused in -Check mode too, since the comparison is just as wrong there.
+$branch = (git branch --show-current).Trim()
+if ($branch -ne "main") { Die "on branch '$branch' - deploy ships main. Merge into main and run it there." }
+Ok "on main"
+
 # ── 3. push ──────────────────────────────────────────────────────────────────
 if (-not $Check) {
     Step "push"
     # No 2>&1 here: git writes progress to stderr, and redirecting a native
     # command's stderr in PowerShell 5.1 turns every line into an error
     # record - which aborts this script even on a successful push.
+    # hooks/guard-main.sh refuses a push to main without this. Deploying is the
+    # integrator's job, so the deploy says so for its own push and nobody else's.
+    $env:PALETTE_INTEGRATOR = "1"
     git push origin main
     if ($LASTEXITCODE -ne 0) { Die "git push failed" }
     Ok "pushed"

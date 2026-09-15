@@ -12,8 +12,8 @@ working in the app.
 Think of yourself as running the library's acquisitions desk. Someone else does
 the reading.
 
-Read `CLAUDE.md` first — it describes the two machines, the corpus layout and
-the bridge. This file only says what your job is.
+Read `AGENTS.md` (loaded through `CLAUDE.md`) and `docs/corpus.md` first —
+together they describe the two machines, the corpus layout and the bridge. This file only says what your job is.
 
 ## Mission
 

@@ -7,6 +7,10 @@
 # Enable once per clone:  git config core.hooksPath hooks
 # Bypass in an emergency: git push --no-verify
 
+# Only the integrator moves main. Checked before the suite, which is slower
+# and beside the point for a push that is refused anyway.
+bash "$(dirname "$0")/guard-main.sh" || exit 1
+
 for candidate in \
   "$LOCALAPPDATA/Python/pythoncore-3.14-64/python.exe" \
   "$HOME/miniconda3/envs/palette/bin/python" \
