@@ -118,6 +118,31 @@ consider moving the end. `words_dropped_at_edges > 0` means a partial
 word was excluded from the manifest; check the quote still reads whole.
 `lead_silence_ms` much above the head pad means dead air.
 
+**A passing alignment score does not mean the words are right.** It is one
+average over the whole span, and a local failure disappears inside it: on
+X50zezLFWWI a 420 s window scored 0.8169 while whisper looped over the
+speaker's thesis, writing one sentence three extra times at zero duration and
+then a single "word" 19.56 s long. A 118 s recut of the same audio came out
+clean. Two checks now flag this, and neither refuses the cut:
+
+- `cut_diagnostics.caption_alignment_local` — the lowest agreement over
+  30-word windows, with the word range and times of the worst one and
+  `flagged` below 0.5. Computed at cut time, because it needs the stored
+  transcript. The score is the share of *heard* words found in the transcript,
+  since caption segments overlap a window and carry more text than it holds.
+  The 0.5 threshold is not yet measured across many clips, so the value is
+  always recorded.
+- `transcription_flags` — words that take no time to say, one word lasting
+  more than 4 s, and runs of five or more words repeated at zero duration.
+  Worked out from the words wherever they are read and never stored, so clips
+  cut before this are checked too.
+
+`GET /api/items/{id}/words` returns both (`cut_diagnostics` as recorded,
+`transcription_flags` computed on read), and a board beat whose own words are
+flagged carries `narration.transcription_flags` and shows a warning on the
+page. When a clip is flagged, recutting a narrower window is the usual fix.
+The logic is in `quotesource/timing.py`.
+
 **Tunables** (all env vars): `QS_CUT_HEAD_PAD_MS` (40),
 `QS_CUT_TAIL_PAD_MS` (80), `QS_CUT_SEARCH_MS` (200),
 `QS_CUT_MIN_SILENCE_MS` (70, what counts as a pause),

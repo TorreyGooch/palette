@@ -96,13 +96,14 @@ Do not recompute gaps by hand, and do not read the `.words.json` off disk to
 choose indices or pauses — the endpoint is the one source for those.
 
 **Reading the file to *check* a clip is allowed, and has earned its place.**
-The endpoint does not return `cut_diagnostics` and flags nothing about
-degenerate timing, so two checks still need the manifest itself: integrity
-(words at zero duration, a single "word" lasting many seconds, repeated runs of
-words — a whisper loop that the span-averaged alignment score can pass) and
-attribution (word times against the audio, to confirm the person the clip is
-credited to is the one speaking). Both are read-only. Report what they find;
-do not edit the manifest.
+`/api/items/{id}/words` now returns `transcription_flags` — words at zero
+duration, one implausibly long word, repeated zero-duration runs — and the
+clip's `cut_diagnostics`, including `caption_alignment_local`, the lowest
+agreement over short windows. **Check both before building on a clip**; a
+flagged beat also shows a warning on the board. Recutting a narrower window is
+the usual fix. Attribution — confirming the credited person is the one
+speaking — still needs the manifest's word times against the audio, and that
+read is allowed: read-only, report what you find, never edit the manifest.
 
 ## The three steps, for a NEW cut — and step 2 is the one that gets skipped
 

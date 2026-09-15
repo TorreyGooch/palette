@@ -602,6 +602,8 @@ def item_words(iid: str, min_gap: float = 0.15):
     if not item:
         raise HTTPException(404, f"no item '{iid}'")
 
+    from quotesource.timing import timing_flags
+
     from . import narration
 
     media = root / "media" / (item.get("filename") or "")
@@ -633,6 +635,13 @@ def item_words(iid: str, min_gap: float = 0.15):
         "duration": manifest.get("duration") or item.get("duration"),
         "words": detailed,
         "pauses": pauses,
+        # What the cut recorded, including `caption_alignment_local`, the
+        # lowest agreement over short windows. Returned so checking a clip
+        # does not mean reading its file off disk.
+        "cut_diagnostics": manifest.get("cut_diagnostics"),
+        # Worked out from the words on every read, never stored, so a clip
+        # cut before these checks existed is checked too.
+        "transcription_flags": timing_flags(words),
     }
 
 

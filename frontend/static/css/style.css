@@ -1254,3 +1254,13 @@ video {
 /* Every word after the first starts a new beat when clicked. */
 .sb-word.hit { cursor: pointer; border-radius: 2px; }
 .sb-word.hit:hover { background: var(--orange); color: var(--bg); opacity: 1; }
+
+/* A beat whose words carry the marks of a whisper failure. Shown, not hidden:
+   the cut still happened, and a person decides what the flag means. */
+.sb-flag {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--orange);
+  border-left: 2px solid var(--orange);
+  padding-left: 6px;
+}

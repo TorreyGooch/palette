@@ -616,6 +616,9 @@ const Storyboard = {
         </div>
         ${who || show ? `<div class="sb-attrib">${esc(who || '')}${
           who && show ? ' · ' : ''}${esc(show || '')}</div>` : ''}
+        ${n.transcription_flags?.suspect ? `<div class="sb-flag" title="${
+          esc(n.transcription_flags.reasons.join('\n'))}">⚠ transcript looks wrong here: ${
+          esc(n.transcription_flags.reasons[0])}</div>` : ''}
         <div class="sb-words">
           <label>words</label>
           <input type="number" min="0" step="1" placeholder="0"

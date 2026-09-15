@@ -102,6 +102,21 @@ def alignment_score(expected: str, heard: str) -> float:
     return round(difflib.SequenceMatcher(None, a, b).ratio(), 4)
 
 
+def local_agreement(ep_dir: Path, abs_start: float, clip_words: list):
+    """The lowest agreement over short windows of a cut clip, or None.
+
+    `clip_words` are in clip time, the transcript in episode time; this is the
+    one place the two are joined, so the conversion is tested here rather than
+    trusted inside `cut_quote`. See `quotesource/timing.py` for why a span
+    average is not enough.
+    """
+    from .timing import window_agreement
+
+    return window_agreement(
+        clip_words,
+        lambda start, end: caption_text(ep_dir, abs_start + start, abs_start + end))
+
+
 def caption_text(ep_dir: Path, start: float, end: float) -> str:
     """The stored transcript's text over an absolute span of the episode."""
     tpath = ep_dir / "transcript.json"
@@ -596,6 +611,11 @@ def cut_quote(episode_id: str, start: float, end: float,
             + "  Set QS_CUT_ALIGN_MIN=0 to cut anyway."
         )
 
+    # The span score above is an average, and an average hides a local
+    # failure: a 29 s whisper loop inside a 420 s window still scored 0.82.
+    # Recorded, never enforced - a person decides what a low window means.
+    local = local_agreement(ep_dir, abs_start, clip_words)
+
     lib_root = get_library_path()
     if not lib_root:
         raise RuntimeError("palette library not configured — run the app once")
@@ -645,6 +665,7 @@ def cut_quote(episode_id: str, start: float, end: float,
                            round(win_start + offset, 3)],
             "caption_alignment": align,
             "caption_alignment_enforced": enforced,
+            "caption_alignment_local": local,
             "audio_offset_s": audio_offset,
         },
     }
@@ -652,8 +673,14 @@ def cut_quote(episode_id: str, start: float, end: float,
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
 
+    from .timing import timing_flags
+
+    # Returned, not stored: the flags are a function of the words, so they are
+    # worked out again wherever the words are read - which is also how clips cut
+    # before this existed get checked.
     result = {"filename": filename, "path": str(dest),
-              "manifest": str(manifest_path), **manifest}
+              "manifest": str(manifest_path), **manifest,
+              "transcription_flags": timing_flags(clip_words)}
 
     # Before the staging branch on purpose: a clip cut for the video pipeline
     # is usually one the remote caller adopts and this library discards, so

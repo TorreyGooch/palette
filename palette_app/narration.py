@@ -155,6 +155,14 @@ def bind(media_dir: Path, item: dict, word_start=None, word_end=None) -> dict:
         if span:
             binding.update(span)
             binding["precision"] = "word"
+            # Only the beat's own words, and only when something is wrong: a
+            # loop elsewhere in the clip is not this beat's problem, and a
+            # board of clean beats should not carry an empty report on each.
+            from quotesource.timing import timing_flags
+
+            flags = timing_flags(words[span["word_start"]:span["word_end"] + 1])
+            if flags["suspect"]:
+                binding["transcription_flags"] = flags
             return binding
 
     # No manifest, or an empty one: the beat is the whole clip.
