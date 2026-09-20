@@ -9,14 +9,18 @@ qs transcribe --batch [--source <id>] [--limit N]
     QS_WHISPER_MODEL    (default: large-v3 on cuda, base on cpu)
     QS_WHISPER_DEVICE   (default: auto)
     QS_WHISPER_COMPUTE  (default: float16 on cuda, int8 on cpu)
+    QS_WHISPER_IDLE_S   (default: 600; 0 keeps a model forever, -1 never caches)
 - Replaces the caption transcript; the previous transcript.json is preserved
   as transcript.<source>.json so provenance is never lost.
 - Batch queue priority: needs_transcription > youtube_auto > youtube_manual.
   Resumable (whisper-done episodes are skipped), throttled downloads, hard
   stop when free disk falls below QS_DISK_FLOOR_GB (default 20).
 """
+import gc
 import json
+import os
 import shutil
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -57,10 +61,67 @@ def _whisper_config():
     return model, device, compute
 
 
+# large-v3 on CUDA is about 3.9 GB of VRAM, and this cache never let one go:
+# one `qs words` call left the corpus app holding that for 4 days and 20 hours,
+# on the card ComfyUI and the embedding model also use. Caching is not the
+# problem - building costs seconds and a cut is interactive - but a model kept
+# through an idle night is memory taken from generation for nothing.
+#
+# So: the same rule the embedding model has had. Keep it while work keeps
+# arriving, drop it when none has for a while. QS_WHISPER_IDLE_S=0 keeps a
+# model forever, which is what a box doing nothing but a transcription backfill
+# wants; -1 disables caching entirely.
+_IDLE_S = float(os.environ.get("QS_WHISPER_IDLE_S", "600"))
+
 _model_cache: dict = {}
+_used: dict = {}
+_cache_lock = threading.Lock()
+_evictor = None
+
+
+def _drop_idle(now: float) -> list:
+    """Forget every model nothing has wanted for _IDLE_S. Caller holds the lock.
+
+    Split out from the thread below so the decision can be tested without
+    threads or waiting: the thread is only a clock around this.
+    """
+    dropped = [key for key, last in _used.items() if now - last >= _IDLE_S]
+    for key in dropped:
+        _model_cache.pop(key, None)
+        _used.pop(key, None)
+    return dropped
+
+
+def _evict_when_idle():
+    """Drop idle models, then leave. The next load starts a new thread."""
+    global _evictor
+
+    while True:
+        with _cache_lock:
+            if _model_cache:
+                _drop_idle(time.monotonic())
+            if not _model_cache:
+                _evictor = None
+                break
+            wait = _IDLE_S - (time.monotonic() - max(_used.values()))
+        # The memory returns when the last reference goes. A transcription
+        # still running holds one, so its model frees when it finishes.
+        gc.collect()
+        time.sleep(min(max(wait, 1.0), 30.0))
+    gc.collect()
+
+
+def release_models():
+    """Drop every cached model now. For tests, and to free memory on demand."""
+    with _cache_lock:
+        _model_cache.clear()
+        _used.clear()
+    gc.collect()
 
 
 def _get_model(model_size: str | None = None):
+    global _evictor
+
     try:
         from faster_whisper import WhisperModel
     except ImportError:
@@ -73,9 +134,19 @@ def _get_model(model_size: str | None = None):
     if model_size:
         model = model_size
     key = (model, device, compute)
-    if key not in _model_cache:
-        _model_cache[key] = WhisperModel(model, device=device, compute_type=compute)
-    return _model_cache[key], key
+
+    if _IDLE_S < 0:
+        return WhisperModel(model, device=device, compute_type=compute), key
+
+    with _cache_lock:
+        if key not in _model_cache:
+            _model_cache[key] = WhisperModel(model, device=device,
+                                             compute_type=compute)
+        _used[key] = time.monotonic()
+        if _IDLE_S > 0 and _evictor is None:
+            _evictor = threading.Thread(target=_evict_when_idle, daemon=True)
+            _evictor.start()
+        return _model_cache[key], key
 
 
 def download_audio(ep_dir: Path, quiet: bool = True) -> Path | None:

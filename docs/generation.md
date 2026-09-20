@@ -76,8 +76,16 @@ way rather than deleted.
 
 **One card, three tenants, and one of them squats.** ComfyUI, the embedding
 model and whisper share one 12 GB GPU. Two of the three let go by themselves:
-the embedding model is released about ten minutes after the last search,
-whisper after its window. **ComfyUI is not one of them** — it keeps its
+the embedding model is released about ten minutes after the last search, and
+whisper after `QS_WHISPER_IDLE_S` (600 s) without a cut or a `words` call.
+
+**Whisper only started doing that on 2026-09-20**, and this page said it did
+long before. Its model cache had no eviction at all: one `qs words` call left
+the corpus app holding 3,930 MB of the card for 4 days and 20 hours, idle, on
+a machine whose whole point is that generation and the corpus take turns. If a
+process is holding the card and nobody is working, check
+`nvidia-smi --query-compute-apps=pid,used_memory --format=csv` before assuming
+which tenant it is. **ComfyUI is not one of them** — it keeps its
 checkpoint resident once loaded and does not give it back. Measured 2026-09-10,
 21 hours after the last generation with nothing queued: 10,292 MB of 12,288
 held by one process, 16% of the card free.
